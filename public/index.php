@@ -3,6 +3,8 @@ declare(strict_types=1);
 require __DIR__ . '/../src/bootstrap.php';
 
 use VMForge\Core\Router;
+use VMForge\Core\RateLimiter;
+use VMForge\Core\Middleware\CsrfMiddleware;
 use VMForge\Controllers\HomeController;
 use VMForge\Controllers\AuthController;
 use VMForge\Controllers\SettingsController;
@@ -30,6 +32,17 @@ use VMForge\Controllers\ReinstallController;
 use VMForge\Controllers\SubnetsController;
 
 $router = new Router();
+
+// Global security: CSRF for all non-GET routes except /api/* and /agent/*
+CsrfMiddleware::validate();
+
+// Optional: per-endpoint rate limit for API routes (120/min per-IP per-method+path)
+$path = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH) ?: '/';
+if (strpos($path, '/api/') === 0) {
+    $ip = $_SERVER['REMOTE_ADDR'] ?? '0.0.0.0';
+    $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
+    RateLimiter::throttle('api:' . $method . ':' . $path . ':' . $ip, 120);
+}
 
 $router->get('/', [HomeController::class, 'index']);
 $router->get('/login', [AuthController::class, 'showLogin']);
