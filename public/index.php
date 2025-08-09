@@ -27,6 +27,7 @@ use VMForge\Controllers\DiskController;
 use VMForge\Controllers\MetricsController;
 use VMForge\Controllers\ISOController;
 use VMForge\Controllers\ReinstallController;
+use VMForge\Controllers\SubnetsController;
 
 $router = new Router();
 
@@ -82,6 +83,9 @@ $router->get('/admin/metrics', [MetricsController::class, 'index']);
 $router->get('/admin/isos', [ISOController::class, 'index']);
 $router->post('/admin/isos', [ISOController::class, 'store']);
 $router->post('/admin/reinstall', [ReinstallController::class, 'create']);
+
+$router->get('/admin/subnets', [SubnetsController::class, 'index']);
+$router->post('/admin/subnets', [SubnetsController::class, 'store']);
 
 // Health
 $router->get('/healthz', [HealthController::class, 'index']);

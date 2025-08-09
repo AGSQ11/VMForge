@@ -1,0 +1,14 @@
+<?php
+// Agent NET_ROUTE_GW helper (add to agent/agent.php if not present)
+if (!function_exists('net_route_gw')) {
+    function net_route_gw(array $p, string $bridge): array {
+        $br = $p['bridge'] ?? $bridge;
+        $gw = $p['gateway'] ?? null;
+        if (!$gw) return [false,'missing gateway'];
+        // add IP if not present
+        \VMForge\Core\Shell::run("ip addr show dev ".escapeshellarg($br)." | grep -q ".escapeshellarg($gw)."/ || ip addr add ".escapeshellarg($gw)."/32 dev ".escapeshellarg($br));
+        \VMForge\Core\Shell::run("sysctl -w net.ipv4.ip_forward=1");
+        return [true, "gateway {$gw} on {$br}"];
+    }
+}
+// And ensure the dispatcher has: case 'NET_ROUTE_GW': return net_route_gw($p, $bridge);
