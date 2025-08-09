@@ -8,6 +8,7 @@ use VMForge\Models\Node;
 class NodeController {
     public function index() {
         Auth::require();
+        \VMForge\Core\Security::requireCsrf($_POST['csrf'] ?? null);
         $nodes = Node::all();
         $rows = '';
         foreach ($nodes as $n) {
@@ -18,6 +19,7 @@ class NodeController {
         </div>
         <div class="card"><h3>Add Node</h3>
         <form method="post" action="/admin/nodes">
+            <input type="hidden" name="csrf" value="<?php echo htmlspecialchars(\VMForge\Core\Security::csrfToken()); ?>">
             <input name="name" placeholder="node name" required>
             <input name="mgmt_url" placeholder="https://node1.example/api" required>
             <input name="bridge" placeholder="br0" value="br0" required>

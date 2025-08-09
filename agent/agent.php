@@ -6,6 +6,8 @@ require __DIR__ . '/../src/bootstrap.php';
 
 use VMForge\Core\Env;
 use VMForge\Core\Shell;
+use VMForge\Services\ImageManager;
+use VMForge\Services\CloudInit;
 
 $controller = Env::get('AGENT_CONTROLLER_URL', 'http://localhost');
 $token = Env::get('AGENT_NODE_TOKEN', 'changeme');
@@ -104,4 +106,62 @@ function lxc_create(array $p, string $bridge): array {
     [$c2,$o2,$e2] = Shell::run("lxc-start -n {$name}");
     if ($c2 !== 0) return [false, $e2 ?: $o2];
     return [true, "created+started {$name}"];
+}
+
+
+function kvm_create(array $p, string $bridge): array {
+    $uuid  = $p['uuid'] ?? uniqid('vm-', true);
+    $name  = $p['name'] ?? "vm-$uuid";
+    $vcpus = (int)($p['vcpus'] ?? 2);
+    $mem   = (int)($p['memory_mb'] ?? 2048);
+    $disk  = (int)($p['disk_gb'] ?? 20);
+    $imgId = (int)($p['image_id'] ?? 1);
+    $br    = $p['bridge'] ?? $bridge;
+
+    $im = new \VMForge\Services\ImageManager();
+    [$ok, $base] = $im->downloadIfMissing($imgId);
+    if (!$ok) return [false, "image: ".$base];
+
+    $overlay = "/var/lib/libvirt/images/{$name}.qcow2";
+    [$c0,$o0,$e0] = \VMForge\Core\Shell::run("qemu-img create -f qcow2 -b ".escapeshellarg($base)." -F qcow2 ".escapeshellarg($overlay));
+    if ($c0 !== 0) return [false, $e0 ?: $o0];
+
+    [$cg,$og,$eg] = \VMForge\Core\Shell::run("qemu-img resize ".escapeshellarg($overlay)." ".escapeshellarg("{$disk}G"));
+    if ($cg !== 0) return [false, $eg ?: $og];
+
+    $seedDir = "/var/lib/libvirt/seed/{$name}";
+    $net = null;
+    if (!empty($p['ip_address'])) {
+        $net = ['address'=>$p['ip_address'], 'prefix'=>$p['prefix'] ?? 24, 'gateway'=>$p['gateway'] ?? '', 'dns'=>$p['dns'] ?? ['1.1.1.1']];
+    }
+    [$cs,$co,$ce] = \VMForge\Services\CloudInit::buildSeedISO($seedDir, $name, $name, $p['ci_user'] ?? 'admin', $p['ssh_key'] ?? null, $p['ci_password'] ?? null, $net);
+    if ($cs !== 0) return [false, $ce ?: $co];
+
+    $xml = <<<XML
+<domain type='kvm'>
+  <name>{$name}</name>
+  <memory unit='MiB'>{$mem}</memory>
+  <vcpu placement='static'>{$vcpus}</vcpu>
+  <os><type arch='x86_64'>hvm</type></os>
+  <devices>
+    <disk type='file' device='disk'>
+      <driver name='qemu' type='qcow2'/>
+      <source file='{$overlay}'/>
+      <target dev='vda' bus='virtio'/>
+    </disk>
+    <disk type='file' device='cdrom'>
+      <driver name='qemu' type='raw'/>
+      <source file='{$seedDir}/seed.iso'/>
+      <target dev='sda' bus='sata'/><readonly/>
+    </disk>
+    <interface type='bridge'><source bridge='{$br}'/><model type='virtio'/></interface>
+    <graphics type='vnc' port='-1' autoport='yes'/>
+  </devices>
+</domain>
+XML;
+    $tmp = sys_get_temp_dir() . "/vmforge-{$name}.xml";
+    file_put_contents($tmp, $xml);
+    [$c2, $o2, $e2] = \VMForge\Core\Shell::run("virsh define {$tmp} && virsh start {$name}");
+    if ($c2 !== 0) return [false, $e2 ?: $o2];
+    return [true, "defined+started {$name} with cloud-init"];
 }

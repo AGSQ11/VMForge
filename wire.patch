@@ -1,0 +1,154 @@
+*** BEGIN PATCH ***
+diff --git a/agent/agent.php b/agent/agent.php
+index 1111111..2222222 100755
+--- a/agent/agent.php
++++ b/agent/agent.php
+@@
+-use VMForge\Core\Shell;
++use VMForge\Core\Shell;
++use VMForge\Services\ImageManager;
++use VMForge\Services\CloudInit;
+ function kvm_create(array $p, string $bridge): array {
+-    $uuid = $p['uuid'] ?? uniqid('vm-', true);
+-    $name = $p['name'] ?? "vm-$uuid";
+-    $vcpus = (int)($p['vcpus'] ?? 2);
+-    $mem = (int)($p['memory_mb'] ?? 2048);
+-    $disk = (int)($p['disk_gb'] ?? 20);
+-    $imgPath = "/var/lib/libvirt/images/{$name}.qcow2";
+-    [$c1, $o1, $e1] = Shell::run("qemu-img create -f qcow2 {$imgPath} {$disk}G");
+-    if ($c1 !== 0) return [false, $e1 ?: $o1];
+-    $bridgeName = $p['bridge'] ?? $bridge;
+-    $xml = <<<XML
+-<domain type='kvm'>
+-  <name>{$name}</name>
+-  <memory unit='MiB'>{$mem}</memory>
+-  <vcpu placement='static'>{$vcpus}</vcpu>
+-  <os><type arch='x86_64' machine='pc-q35-7.2'>hvm</type></os>
+-  <devices>
+-    <disk type='file' device='disk'>
+-      <driver name='qemu' type='qcow2'/>
+-      <source file='{$imgPath}'/>
+-      <target dev='vda' bus='virtio'/>
+-    </disk>
+-    <interface type='bridge'><source bridge='{$bridgeName}'/><model type='virtio'/></interface>
+-    <graphics type='vnc' port='-1' autoport='yes'/>
+-  </devices>
+-</domain>
+-XML;
+-    $tmp = sys_get_temp_dir() . "/vmforge-{$name}.xml";
+-    file_put_contents($tmp, $xml);
+-    [$c2, $o2, $e2] = Shell::run("virsh define {$tmp} && virsh start {$name}");
+-    if ($c2 !== 0) return [false, $e2 ?: $o2];
+-    return [true, "defined+started {$name}"];
++    $uuid  = $p['uuid'] ?? uniqid('vm-', true);
++    $name  = $p['name'] ?? "vm-$uuid";
++    $vcpus = (int)($p['vcpus'] ?? 2);
++    $mem   = (int)($p['memory_mb'] ?? 2048);
++    $disk  = (int)($p['disk_gb'] ?? 20);
++    $imgId = (int)($p['image_id'] ?? 1);
++    $br    = $p['bridge'] ?? $bridge;
++    $im = new ImageManager();
++    [$ok, $base] = $im->downloadIfMissing($imgId);
++    if (!$ok) return [false, "image: ".$base];
++    $overlay = "/var/lib/libvirt/images/{$name}.qcow2";
++    [$c0,$o0,$e0] = Shell::run("qemu-img create -f qcow2 -b ".escapeshellarg($base)." -F qcow2 ".escapeshellarg($overlay));
++    if ($c0 !== 0) return [false, $e0 ?: $o0];
++    [$cg,$og,$eg] = Shell::run("qemu-img resize ".escapeshellarg($overlay)." ".escapeshellarg("{$disk}G"));
++    if ($cg !== 0) return [false, $eg ?: $og];
++    $seedDir = "/var/lib/libvirt/seed/{$name}";
++    $net = null;
++    if (!empty($p['ip_address'])) {
++        $net = ['address'=>$p['ip_address'], 'prefix'=>$p['prefix'] ?? 24, 'gateway'=>$p['gateway'] ?? '', 'dns'=>$p['dns'] ?? ['1.1.1.1']];
++    }
++    [$cs,$co,$ce] = CloudInit::buildSeedISO($seedDir, $name, $name, $p['ci_user'] ?? 'admin', $p['ssh_key'] ?? null, $p['ci_password'] ?? null, $net);
++    if ($cs !== 0) return [false, $ce ?: $co];
++    $xml = <<<XML
++<domain type='kvm'>
++  <name>{$name}</name>
++  <memory unit='MiB'>{$mem}</memory>
++  <vcpu placement='static'>{$vcpus}</vcpu>
++  <os><type arch='x86_64'>hvm</type></os>
++  <devices>
++    <disk type='file' device='disk'>
++      <driver name='qemu' type='qcow2'/>
++      <source file='{$overlay}'/>
++      <target dev='vda' bus='virtio'/>
++    </disk>
++    <disk type='file' device='cdrom'>
++      <driver name='qemu' type='raw'/>
++      <source file='{$seedDir}/seed.iso'/>
++      <target dev='sda' bus='sata'/><readonly/>
++    </disk>
++    <interface type='bridge'><source bridge='{$br}'/><model type='virtio'/></interface>
++    <graphics type='vnc' port='-1' autoport='yes'/>
++  </devices>
++</domain>
++XML;
++    $tmp = sys_get_temp_dir() . "/vmforge-{$name}.xml";
++    file_put_contents($tmp, $xml);
++    [$c2, $o2, $e2] = Shell::run("virsh define {$tmp} && virsh start {$name}");
++    if ($c2 !== 0) return [false, $e2 ?: $o2];
++    return [true, "defined+started {$name} with cloud-init"];
+ }
+diff --git a/src/Controllers/APIController.php b/src/Controllers/APIController.php
+index 3333333..4444444 100644
+--- a/src/Controllers/APIController.php
++++ b/src/Controllers/APIController.php
+@@
+-    private function auth(): bool { /* ... */ }
+-    public function listNodes() { /* old tokenless check */ }
+-    public function createJob() { /* old tokenless check */ }
++    public function listNodes() {
++        $auth = \VMForge\Core\APIAuth::userFromBearer();
++        if (!$auth) return \VMForge\Core\Response::json(['error'=>'unauthorized'], 401);
++        return \VMForge\Core\Response::json(['nodes' => \VMForge\Models\Node::all()]);
++    }
++    public function createJob() {
++        $auth = \VMForge\Core\APIAuth::userFromBearer();
++        if (!$auth) return \VMForge\Core\Response::json(['error'=>'unauthorized'], 401);
++        $input = json_decode(file_get_contents('php://input') ?: '[]', true);
++        $nodeId = (int)($input['node_id'] ?? 0);
++        $type = $input['type'] ?? 'KVM_CREATE';
++        $payload = $input['payload'] ?? [];
++        $jobId = \VMForge\Models\Job::enqueue($nodeId, $type, $payload);
++        return \VMForge\Core\Response::json(['job_id'=>$jobId], 201);
++    }
+diff --git a/src/Controllers/NodeController.php b/src/Controllers/NodeController.php
+index 5555555..6666666 100644
+--- a/src/Controllers/NodeController.php
++++ b/src/Controllers/NodeController.php
+@@
+-        <form method="post" action="/admin/nodes">
++        <form method="post" action="/admin/nodes">
++            <input type="hidden" name="csrf" value="<?php echo htmlspecialchars(\VMForge\Core\Security::csrfToken()); ?>">
+@@
+-    public function store() {
+-        Auth::require();
++    public function store() {
++        Auth::require();
++        \VMForge\Core\Security::requireCsrf($_POST['csrf'] ?? null);
+diff --git a/src/Controllers/VMController.php b/src/Controllers/VMController.php
+index 7777777..8888888 100644
+--- a/src/Controllers/VMController.php
++++ b/src/Controllers/VMController.php
+@@
+-        <form method="post" action="/admin/vms">
++        <form method="post" action="/admin/vms">
++            <input type="hidden" name="csrf" value="<?php echo htmlspecialchars(\VMForge\Core\Security::csrfToken()); ?>">
+@@
+-            <input name="ip_address" placeholder="192.0.2.10" required>
++            <input name="ip_address" placeholder="192.0.2.10">
+@@
+-        $uuid = UUID::v4();
++        $uuid = UUID::v4();
++        \VMForge\Core\Security::requireCsrf($_POST['csrf'] ?? null);
+@@
+-            'ip_address'=>$_POST['ip_address'] ?? ''
++            'ip_address'=>$_POST['ip_address'] ?? ''
++        ];
++        if (empty($d['ip_address'])) {
++            $pdo = \VMForge\Core\DB::pdo();
++            $poolId = (int)($pdo->query("SELECT id FROM ip_pools ORDER BY id ASC LIMIT 1")->fetchColumn() ?: 0);
++            if ($poolId) { $ip = \VMForge\Services\IPAM::nextFree($poolId); if ($ip) $d['ip_address'] = $ip; }
+         ];
+*** END PATCH ***
