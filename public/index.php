@@ -25,6 +25,8 @@ use VMForge\Controllers\HealthController;
 use VMForge\Controllers\StorageController;
 use VMForge\Controllers\DiskController;
 use VMForge\Controllers\MetricsController;
+use VMForge\Controllers\ISOController;
+use VMForge\Controllers\ReinstallController;
 
 $router = new Router();
 
@@ -75,6 +77,12 @@ $router->get('/admin/storage', [StorageController::class, 'index']);
 $router->post('/admin/storage', [StorageController::class, 'store']);
 $router->post('/admin/disk-resize', [DiskController::class, 'resize']);
 
+$router->get('/admin/metrics', [MetricsController::class, 'index']);
+
+$router->get('/admin/isos', [ISOController::class, 'index']);
+$router->post('/admin/isos', [ISOController::class, 'store']);
+$router->post('/admin/reinstall', [ReinstallController::class, 'create']);
+
 // Health
 $router->get('/healthz', [HealthController::class, 'index']);
 
@@ -85,7 +93,5 @@ $router->post('/agent/ack', [AgentController::class, 'ack']);
 // API
 $router->get('/api/v1/nodes', [APIController::class, 'listNodes']);
 $router->post('/api/v1/jobs', [APIController::class, 'createJob']);
-
-$router->get('/admin/metrics', [MetricsController::class, 'index']);
 
 $router->dispatch();

@@ -31,15 +31,22 @@ class VMDetailsController {
                 <form method="post" action="/admin/restore-new" style="display:inline;margin-left:6px"><input type="hidden" name="csrf" value="'.$csrf.'"><input type="hidden" name="node_id" value="'.(int)$vm['node_id'].'"><input type="hidden" name="source" value="'.htmlspecialchars($b['location']).'"><input name="new_name" placeholder="new-vm-name" required><button type="submit">Restore as new</button></form>
             </td></tr>';
         }
-        // resize form
-        $resizeForm = '<div class="card"><h3>Disk Resize</h3>
-        <form method="post" action="/admin/disk-resize">
+        // ISO list for reinstall
+        $isos = $pdo->query('SELECT id,name FROM isos ORDER BY id DESC')->fetchAll(PDO::FETCH_ASSOC);
+        $isoOptions = '';
+        foreach ($isos as $i) { $isoOptions .= '<option value="'.$i['id'].'">'.htmlspecialchars($i['name']).'</option>'; }
+
+        $reinstall = '<div class="card"><h3>Reinstall from ISO</h3>
+        <form method="post" action="/admin/reinstall">
             <input type="hidden" name="csrf" value="'.$csrf.'">
             <input type="hidden" name="node_id" value="'.(int)$vm['node_id'].'">
             <input type="hidden" name="vm_name" value="'.htmlspecialchars($vm['name']).'">
-            <input type="number" name="new_disk_gb" placeholder="New disk size (GB)" required>
-            <button type="submit">Resize</button>
-        </form></div>';
+            <label>ISO</label><select name="iso_id" required>'.$isoOptions.'</select>
+            <button type="submit">Attach ISO & boot</button>
+        </form>
+        <p>Boot order will be set to CD first for next boot.</p>
+        </div>';
+
         $html = '<div class="card"><h2>VM '.htmlspecialchars($vm['name']).'</h2>
         <p>UUID: '.htmlspecialchars($vm['uuid']).'</p>
         <p>Type: '.htmlspecialchars($vm['type']).' | Node: '.(int)$vm['node_id'].' | Project: '.(int)$vm['project_id'].'</p>
@@ -52,7 +59,8 @@ class VMDetailsController {
         </form>
         <p><a href="/console/open?uuid='.htmlspecialchars($vm['uuid']).'">Open Console</a></p>
         </div>
-        <div class="card"><h3>Backups</h3><table class="table"><thead><tr><th>ID</th><th>Snapshot</th><th>Location</th><th>Action</th></tr></thead><tbody>'.$rows.'</tbody></table></div>' . $resizeForm;
+        <div class="card"><h3>Backups</h3><table class="table"><thead><tr><th>ID</th><th>Snapshot</th><th>Location</th><th>Action</th></tr></thead><tbody>'.$rows.'</tbody></table></div>'
+        . $reinstall;
         View::render('VM Details', $html);
     }
     public function action() {

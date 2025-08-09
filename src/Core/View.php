@@ -12,6 +12,7 @@ class View {
             . '<a href="/admin/nodes">Nodes</a> '
             . '<a href="/admin/vms">VMs</a> '
             . '<a href="/admin/images">Images</a> '
+            . '<a href="/admin/isos">ISOs</a> '
             . '<a href="/admin/ip-pools">IP Pools</a> '
             . '<a href="/admin/api-tokens">API Tokens</a> '
             . '<a href="/admin/backups">Backups</a> '
