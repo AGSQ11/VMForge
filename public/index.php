@@ -24,6 +24,7 @@ use VMForge\Controllers\RestoreController;
 use VMForge\Controllers\HealthController;
 use VMForge\Controllers\StorageController;
 use VMForge\Controllers\DiskController;
+use VMForge\Controllers\MetricsController;
 
 $router = new Router();
 
@@ -84,5 +85,7 @@ $router->post('/agent/ack', [AgentController::class, 'ack']);
 // API
 $router->get('/api/v1/nodes', [APIController::class, 'listNodes']);
 $router->post('/api/v1/jobs', [APIController::class, 'createJob']);
+
+$router->get('/admin/metrics', [MetricsController::class, 'index']);
 
 $router->dispatch();

@@ -70,6 +70,7 @@ function executeJob(string $type, array $p, string $bridge): array {
         case 'LXC_STOP':               return lxc_stop($p, $bridge);
         case 'LXC_DELETE':             return lxc_delete($p, $bridge);
         case 'NET_ANTISPOOF':          return net_antispoof($p, $bridge);
+        case 'DISK_RESIZE':          return disk_resize($p, $bridge);
         default:                       return [false, "Unknown job type {$type}"];
     }
 }
@@ -303,4 +304,20 @@ function net_antispoof(array $p, string $bridge): array {
         Shell::run("nft add rule bridge vmforge_antispoof forward iifname ".escapeshellarg($ifname)." ip saddr != ".escapeshellarg($ip4)." drop || true");
     }
     return [true, "antispoof set on {$ifname}"];
+}
+
+function disk_resize(array $p, string $bridge): array {
+    $name = $p['name'] ?? ($p['vm_name'] ?? null);
+    $new  = (int)($p['new_gb'] ?? 0);
+    if (!$name || $new < 1) return [false, 'missing name/new_gb'];
+    $disk = trim(shell_exec("virsh domblklist ".escapeshellarg($name)." | awk '/vda/ {print $2}'") ?: '');
+    if ($disk === '') return [false, 'cannot find disk'];
+    if (preg_match('~\.qcow2$~', $disk)) {
+        return \VMForge\Core\Shell::run("qemu-img resize ".escapeshellarg($disk)." {$new}G");
+    } elseif (preg_match('~^/dev/[^/]+/[^/]+$~', $disk)) {
+        return \VMForge\Core\Shell::run("lvresize -y -L {$new}G ".escapeshellarg($disk));
+    } elseif (preg_match('~^/dev/zvol/.+~', $disk)) {
+        return \VMForge\Core\Shell::run("zfs set volsize={$new}G ".escapeshellarg(substr($disk, 10)));
+    }
+    return [false, "unsupported disk path {$disk}"];
 }
