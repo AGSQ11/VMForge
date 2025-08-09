@@ -2,19 +2,46 @@ name: CI
 
 on:
   push:
+    branches: ['**']   # run on every branch
   pull_request:
 
 jobs:
   php-lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: shivammathur/setup-php@v2
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
         with:
           php-version: '8.3'
           extensions: mbstring, json, curl, pdo_mysql
+
+      - name: Debug — show commit and StorageController seen by runner
+        run: |
+          echo "GITHUB_REF=$GITHUB_REF"
+          echo "GITHUB_SHA=$GITHUB_SHA"
+          git rev-parse HEAD
+          echo "--- possible duplicates (case-insensitive) ---"
+          git ls-tree -r HEAD --name-only | grep -i 'storagecontroller.php' || true
+          echo "--- list src/Controllers dir ---"
+          ls -la src/Controllers || true
+          echo "--- HEAD: src/Controllers/StorageController.php ---"
+          awk 'BEGIN{n=1} {printf "%d:%s\n", n, $0; n++}' src/Controllers/StorageController.php || true
+          echo "--- grep for colon-foreach / short echo ---"
+          grep -nE 'foreach[[:space:]]*\(.*\)[[:space:]]*:' src/Controllers/StorageController.php || true
+          grep -n '<\?=' src/Controllers/StorageController.php || true
+
       - name: Validate composer
         run: php -r "echo 'composer.json OK' . PHP_EOL;"
+
+      - name: List PHP files to lint
+        run: |
+          find src agent public -type f -name '*.php' | sort
+
       - name: Syntax check
         run: |
           set -e

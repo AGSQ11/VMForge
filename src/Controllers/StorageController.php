@@ -1,5 +1,6 @@
 <?php
 namespace VMForge\Controllers;
+
 use VMForge\Core\Auth;
 use VMForge\Core\View;
 use VMForge\Core\Security;
@@ -9,7 +10,7 @@ class StorageController {
     public function index() {
         Auth::require();
         $pools = Storage::all();
-        $csrf = Security::csrfToken();
+        $csrf  = Security::csrfToken();
 
         ob_start();
         ?>
@@ -60,7 +61,7 @@ class StorageController {
 
         $driver = $_POST['driver'] ?? 'qcow2';
         $cfgRaw = $_POST['config'] ?? '';
-        $cfg = ($cfgRaw !== '') ? json_decode($cfgRaw, true) : null;
+        $cfg    = ($cfgRaw !== '') ? json_decode($cfgRaw, true) : null;
         if ($cfgRaw !== '' && $cfg === null) { http_response_code(400); echo 'invalid JSON in config'; return; }
 
         Storage::createPool($name, $driver, $cfg);
