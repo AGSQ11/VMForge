@@ -1,84 +1,65 @@
 <?php
-// Add to agent/agent.php — nftables per-VM ingress sync
-// 1) Dispatcher case:
-// case 'FW_SYNC':               return fw_sync($p, $bridge);
-//
-// 2) Function:
-
+// Hardened version: validate CIDRs and ports more strictly before composing nft commands.
 function fw_sync(array $p, string $defaultBridge): array {
     $uuid = $p['uuid'] ?? null;
     $name = $p['name'] ?? null;
     if (!$uuid || !$name) return [false,'missing uuid/name'];
 
     $pdo = \VMForge\Core\DB::pdo();
-    // Determine interface name for this VM
-    [$c,$out,$e] = \VMForge\Core\Shell::run("virsh domiflist ".escapeshellarg($name));
+
+    [$c,$out,$e] = \VMForge\Core\Shell::runf('virsh', ['domiflist', $name]);
     if ($c !== 0 || trim($out) === '') return [false, 'cannot get interfaces for '.$name];
     $iface = null;
     foreach (explode("\n", $out) as $line) {
         if (preg_match('~^\s*(vnet\d+|tap\d+)\s+~', $line, $m)) { $iface = $m[1]; break; }
     }
-    if (!$iface) $iface = 'vnet0'; // best-effort fallback
+    if (!$iface) $iface = 'vnet0';
 
-    // Fetch firewall mode and rules for this VM
     $st = $pdo->prepare("SELECT firewall_mode FROM vm_instances WHERE uuid=? LIMIT 1");
     $st->execute([$uuid]);
     $mode = (string)($st->fetchColumn() ?: 'disabled');
 
     $rules = $pdo->prepare("SELECT protocol, source_cidr, dest_ports, action, priority FROM firewall_rules WHERE vm_uuid=? AND enabled=1 ORDER BY priority ASC, id ASC");
     $rules->execute([$uuid]);
-    $rows = $rules->fetchAll(PDO::FETCH_ASSOC);
+    $rows = $rules->fetchAll(\PDO::FETCH_ASSOC);
 
-    // Prepare nftables table and base chain
-    \VMForge\Core\Shell::run("nft list table inet vmforge >/dev/null 2>&1 || nft add table inet vmforge");
-    \VMForge\Core\Shell::run("nft list chain inet vmforge vmforge_forward >/dev/null 2>&1 || nft add chain inet vmforge vmforge_forward { type filter hook forward priority 0; policy accept; }");
+    \VMForge\Core\Shell::run('nft list table inet vmforge >/dev/null 2>&1 || nft add table inet vmforge');
+    \VMForge\Core\Shell::run('nft list chain inet vmforge vmforge_forward >/dev/null 2>&1 || nft add chain inet vmforge vmforge_forward { type filter hook forward priority 0; policy accept; }');
 
-    // Per-interface chain
     $chain = "vm-".$iface;
     \VMForge\Core\Shell::run("nft list chain inet vmforge ".escapeshellarg($chain)." >/dev/null 2>&1 || nft add chain inet vmforge ".escapeshellarg($chain)." { type filter; }");
 
-    // Ensure jump from forward to per-if chain is unique
-    // Remove existing jump for this iface
-    \VMForge\Core\Shell::run("nft list chain inet vmforge vmforge_forward | grep -q ".escapeshellarg("iifname \"{$iface}\" jump {$chain}") . " && nft delete rule inet vmforge vmforge_forward handle $(nft --handle list chain inet vmforge vmforge_forward | awk '/iifname \"" . $iface . "\" jump " . $chain . "/{print $(NF)}') || true");
-    // Add fresh jump
+    \VMForge\Core\Shell::run(
+        "nft --handle list chain inet vmforge vmforge_forward | awk '/iifname \"" . $iface . "\" jump " . $chain . "/{print \$NF}' | xargs -r -I{} nft delete rule inet vmforge vmforge_forward handle {}"
+    );
     \VMForge\Core\Shell::run("nft add rule inet vmforge vmforge_forward iifname ".escapeshellarg($iface)." jump ".escapeshellarg($chain));
-
-    // Flush per-if chain
     \VMForge\Core\Shell::run("nft flush chain inet vmforge ".escapeshellarg($chain));
 
     if ($mode === 'disabled') {
-        // pass-through
         \VMForge\Core\Shell::run("nft add rule inet vmforge ".escapeshellarg($chain)." return");
         return [true, 'firewall disabled for '.$name];
     }
 
-    // Build rules
     foreach ($rows as $r) {
         $proto = $r['protocol'];
-        $src   = trim($r['source_cidr']);
-        $ports = trim($r['dest_ports']);
+        $src   = trim((string)$r['source_cidr']);
+        $ports = trim((string)$r['dest_ports']);
         $act   = $r['action'] === 'deny' ? 'drop' : 'accept';
 
-        $conds = [];
-        // proto
-        if ($proto === 'tcp')      { $conds[] = 'meta l4proto tcp'; }
-        elseif ($proto === 'udp')  { $conds[] = 'meta l4proto udp'; }
-        elseif ($proto === 'icmp') { $conds[] = 'meta l4proto icmp || meta l4proto icmpv6'; }
-        // source (IPv4 or IPv6)
+        if (!in_array($proto, ['tcp','udp','icmp','any'], true)) continue;
+        // Validate CIDR
         if ($src !== '' && strtolower($src) !== 'any') {
-            if (strpos($src, ':') !== false) { $conds.append('ip6 saddr ' + $src); } else { /* python artifact */ }
+            $valid4 = (bool)preg_match('~^\d{1,3}(?:\.\d{1,3}){3}/\d{1,2}$~', $src);
+            $valid6 = (bool)preg_match('~^[0-9a-f:]+/\d{1,3}$~i', $src);
+            if (!$valid4 && !$valid6) continue;
         }
-    }
+        // Validate ports
+        if ($ports !== '' && strtolower($ports) !== 'any') {
+            if (!preg_match('~^\d{1,5}(-\d{1,5})?(,\d{1,5}(-\d{1,5})?)*$~', $ports)) continue;
+        }
 
-    // The above dynamic string building is easier in PHP directly; rebuild now
-    $cmds = [];
-    foreach ($rows as $r) {
         $conds = [];
-        $proto = $r['protocol'];
-        $src   = trim($r['source_cidr']);
-        $ports = trim($r['dest_ports']);
-        $act   = $r['action'] === 'deny' ? 'drop' : 'accept';
-
+        if ($proto === 'tcp')      $conds.append = null; // placeholder to keep diff small
         if ($proto === 'tcp')      $conds[] = 'meta l4proto tcp';
         elseif ($proto === 'udp')  $conds[] = 'meta l4proto udp';
         elseif ($proto === 'icmp') $conds[] = '(meta l4proto icmp || meta l4proto icmpv6)';
@@ -87,28 +68,25 @@ function fw_sync(array $p, string $defaultBridge): array {
             if (strpos($src, ':') !== false) $conds[] = 'ip6 saddr ' . $src;
             else $conds[] = 'ip saddr ' . $src;
         }
+
         if ($ports !== '' && strtolower($ports) !== 'any') {
-            $ports = preg_replace('~\s+~','',$ports);
             if (strpos($ports, ',') !== false) {
-                $conds[] = 'tcp dport { ' . $ports . ' }';
-                $conds[] = 'udp dport { ' . $ports . ' }';
+                $conds[] = '(tcp dport { ' . $ports . ' } || udp dport { ' . $ports . ' })';
             } elseif (strpos($ports, '-') !== false) {
-                $conds[] = 'tcp dport ' . $ports;
-                $conds[] = 'udp dport ' . $ports;
+                $conds[] = '(tcp dport ' . $ports . ' || udp dport ' . $ports . ')';
             } else {
                 $conds[] = '(tcp dport ' . $ports . ' || udp dport ' . $ports . ')';
             }
         }
-        $cmds[] = "nft add rule inet vmforge ".escapeshellarg($chain)." " . implode(' ', $conds) . " " . $act;
-    }
-    foreach ($cmds as $cmd) { \VMForge\Core\Shell::run($cmd); }
 
-    // Terminal rule: allowlist => drop unmatched; denylist => return (accept elsewhere)
+        $cmd = "nft add rule inet vmforge ".escapeshellarg($chain)." " . implode(' ', $conds) . " " . $act;
+        \VMForge\Core\Shell::run($cmd);
+    }
+
     if ($mode === 'allowlist') {
         \VMForge\Core\Shell::run("nft add rule inet vmforge ".escapeshellarg($chain)." counter drop");
-    } else { // denylist
+    } else {
         \VMForge\Core\Shell::run("nft add rule inet vmforge ".escapeshellarg($chain)." return");
     }
-
-    return [true, "fw synced for {$name} ({$iface}) with mode {$mode} and ".count($rows)." rules"];
+    return [true, "fw synced for {$name} ({$iface}) with mode {$mode}"];
 }

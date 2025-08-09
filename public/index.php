@@ -2,6 +2,7 @@
 declare(strict_types=1);
 require __DIR__ . '/../src/bootstrap.php';
 
+use VMForge\Core\Headers;
 use VMForge\Core\Router;
 use VMForge\Core\RateLimiter;
 use VMForge\Core\Middleware\CsrfMiddleware;
@@ -34,6 +35,9 @@ use VMForge\Controllers\Subnets6Controller;
 use VMForge\Controllers\BandwidthController;
 use VMForge\Controllers\ZFSReposController;
 use VMForge\Controllers\FirewallController;
+
+Headers::sendSecurityHeaders();
+Headers::initSession();
 
 $router = new Router();
 
