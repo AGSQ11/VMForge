@@ -1,0 +1,16 @@
+\
+    [Unit]
+    Description=VMForge Agent
+    After=network.target
+
+    [Service]
+    Type=simple
+    User=root
+    EnvironmentFile=/etc/vmforge-agent.env
+    WorkingDirectory=/var/www/vmforge
+    ExecStart=/usr/bin/php /var/www/vmforge/agent/agent.php
+    Restart=always
+    RestartSec=5
+
+    [Install]
+    WantedBy=multi-user.target
