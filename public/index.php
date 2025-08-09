@@ -1,0 +1,35 @@
+<?php
+declare(strict_types=1);
+
+require __DIR__ . '/../src/bootstrap.php';
+
+use VMForge\Core\Router;
+use VMForge\Controllers\HomeController;
+use VMForge\Controllers\AuthController;
+use VMForge\Controllers\NodeController;
+use VMForge\Controllers\VMController;
+use VMForge\Controllers\AgentController;
+use VMForge\Controllers\APIController;
+
+// Routes
+$router = new Router();
+
+// UI
+$router->get('/', [HomeController::class, 'index']);
+$router->get('/login', [AuthController::class, 'showLogin']);
+$router->post('/login', [AuthController::class, 'login']);
+$router->get('/logout', [AuthController::class, 'logout']);
+$router->get('/admin/nodes', [NodeController::class, 'index']);
+$router->post('/admin/nodes', [NodeController::class, 'store']);
+$router->get('/admin/vms', [VMController::class, 'index']);
+$router->post('/admin/vms', [VMController::class, 'store']);
+
+// Agent
+$router->post('/agent/poll', [AgentController::class, 'poll']);
+$router->post('/agent/ack', [AgentController::class, 'ack']);
+
+// API
+$router->get('/api/v1/nodes', [APIController::class, 'listNodes']);
+$router->post('/api/v1/jobs', [APIController::class, 'createJob']);
+
+$router->dispatch();

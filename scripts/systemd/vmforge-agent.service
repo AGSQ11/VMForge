@@ -1,0 +1,14 @@
+[Unit]
+Description=VMForge Agent — an ENGINYRING project
+After=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/vmforge-agent.env
+ExecStart=/usr/bin/php /opt/vmforge/agent.php
+Restart=always
+RestartSec=2
+User=root
+
+[Install]
+WantedBy=multi-user.target

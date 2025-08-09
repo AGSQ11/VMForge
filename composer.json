@@ -1,0 +1,14 @@
+{
+  "name": "enginyring/vmforge",
+  "description": "VMForge \u2014 an ENGINYRING project: Open-source KVM + LXC panel + agent",
+  "type": "project",
+  "license": "AGPL-3.0-only",
+  "require": {
+    "php": "^8.2"
+  },
+  "autoload": {
+    "psr-4": {
+      "VMForge\\": "src/"
+    }
+  }
+}
