@@ -18,9 +18,21 @@ class StorageController {
             $rows .= '<tr><td>'.(int)$p['id'].'</td><td>'.htmlspecialchars($p['name']).'</td><td>'.htmlspecialchars($p['driver']).'</td><td><code>'.htmlspecialchars($p['config']).'</code></td></tr>';
         }
 
-        $table = '<div class="card"><h2>Storage Pools</h2><table class="table"><thead><tr><th>ID</th><th>Name</th><th>Driver</th><th>Config</th></tr></thead><tbody>'.$rows.'</tbody></table></div>';
+        $table = <<<HTML_TABLE
+<div class="card">
+  <h2>Storage Pools</h2>
+  <table class="table">
+    <thead>
+      <tr><th>ID</th><th>Name</th><th>Driver</th><th>Config</th></tr>
+    </thead>
+    <tbody>
+      {$rows}
+    </tbody>
+  </table>
+</div>
+HTML_TABLE;
 
-        $form = <<<HTML
+        $form = <<<HTML_FORM
 <div class="card"><h3>Add Pool</h3>
 <form method="post" action="/admin/storage">
   <input type="hidden" name="csrf" value="{$csrf}">
@@ -34,7 +46,7 @@ class StorageController {
   <button type="submit">Create</button>
 </form>
 </div>
-HTML;
+HTML_FORM;
 
         View::render('Storage', $table . $form);
     }
