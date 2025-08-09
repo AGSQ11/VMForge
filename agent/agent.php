@@ -111,7 +111,7 @@ function kvm_reinstall(array $p, string $bridge): array {
         $xml = preg_replace('~</devices>~', "<disk type='file' device='cdrom'><driver name='qemu' type='raw'/><source file='{$path}'/><target dev='sda' bus='sata'/><readonly/></disk></devices>", $xml, 1);
     }
     file_put_contents($tmp, $xml);
-    [$cdef,$odef,$edef] = \VMForge\Core\Shell::run("virsh define {$tmp}");
+    [$cdef,$odef,$edef] = \VMForge\Core\Shell::runf('virsh', ['define', $tmp]);
     if ($cdef !== 0) return [false, $edef ?: $odef];
     [$cs,$os,$es] = \VMForge\Core\Shell::run("virsh start ".escapeshellarg($name));
     if ($cs !== 0) return [false, $es ?: $os];
