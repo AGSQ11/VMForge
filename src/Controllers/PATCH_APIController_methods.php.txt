@@ -1,0 +1,18 @@
+<?php
+// Replacement for APIController.php body methods
+public function listNodes() {
+    $auth = \VMForge\Core\APIAuth::userFromBearer();
+    if (!$auth) return \VMForge\Core\Response::json(['error'=>'unauthorized'], 401);
+    return \VMForge\Core\Response::json(['nodes' => \VMForge\Models\Node::all()]);
+}
+
+public function createJob() {
+    $auth = \VMForge\Core\APIAuth::userFromBearer();
+    if (!$auth) return \VMForge\Core\Response::json(['error'=>'unauthorized'], 401);
+    $input = json_decode(file_get_contents('php://input') ?: '[]', true);
+    $nodeId = (int)($input['node_id'] ?? 0);
+    $type = $input['type'] ?? 'KVM_CREATE';
+    $payload = $input['payload'] ?? [];
+    $jobId = \VMForge\Models\Job::enqueue($nodeId, $type, $payload);
+    return \VMForge\Core\Response::json(['job_id'=>$jobId], 201);
+}

@@ -1,0 +1,5 @@
+Update your forms to include a CSRF token:
+<input type="hidden" name="csrf" value="<?php echo htmlspecialchars(\VMForge\Core\Security::csrfToken()); ?>">
+
+And at the beginning of POST handlers, call:
+\VMForge\Core\Security::requireCsrf($_POST['csrf'] ?? null);
