@@ -1,0 +1,14 @@
+[Unit]
+Description=VMForge Alerts Sweep
+After=network.target mysql.service mariadb.service
+
+[Service]
+Type=simple
+User=vmforge
+WorkingDirectory=/var/www/vmforge
+ExecStart=/usr/bin/php /var/www/vmforge/scripts/metrics/alerts_sweep.php
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

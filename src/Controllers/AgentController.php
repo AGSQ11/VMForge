@@ -2,7 +2,6 @@
 namespace VMForge\Controllers;
 
 use VMForge\Core\DB;
-use VMForge\Core\Response;
 use VMForge\Services\AgentToken;
 
 class AgentController {
@@ -15,8 +14,11 @@ class AgentController {
         $node = self::authenticateNode($token);
         if (!$node) { http_response_code(401); echo json_encode(['error'=>'unauthorized']); return; }
 
-        // fetch next pending job
+        // heartbeat
         $pdo = DB::pdo();
+        $pdo->prepare('UPDATE nodes SET last_seen_at=NOW() WHERE id=?')->execute([$node['id']]);
+
+        // fetch next pending job
         $st = $pdo->prepare('SELECT id, type, payload FROM jobs WHERE node_id=? AND status=\'pending\' ORDER BY id ASC LIMIT 1');
         $st->execute([$node['id']]);
         $job = $st->fetch(\PDO::FETCH_ASSOC);
@@ -57,14 +59,13 @@ class AgentController {
             return ['id' => (int)$row['id']];
         }
 
-        // Second pass: verify against hashed tokens (scan is acceptable for small node counts)
+        // Second pass: verify against hashed tokens
         $q = $pdo->query('SELECT id, token_hash, token_old_hash FROM nodes WHERE token_hash IS NOT NULL OR token_old_hash IS NOT NULL');
         while ($r = $q->fetch(\PDO::FETCH_ASSOC)) {
-            if (AgentToken::verify($provided, $r['token_hash'] ?? null) || AgentToken::verify($provided, $r['token_old_hash'] ?? null)) {
+            if (\VMForge\Services\AgentToken::verify($provided, $r['token_hash'] ?? null) || \VMForge\Services\AgentToken::verify($provided, $r['token_old_hash'] ?? null)) {
                 return ['id' => (int)$r['id']];
             }
         }
-
         return null;
     }
 }

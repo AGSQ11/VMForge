@@ -1,0 +1,10 @@
+[Unit]
+Description=Run VMForge Alerts Sweep every minute
+
+[Timer]
+OnUnitActiveSec=60s
+AccuracySec=30s
+Unit=vmforge-metrics.service
+
+[Install]
+WantedBy=timers.target
