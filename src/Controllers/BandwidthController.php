@@ -71,16 +71,13 @@ class BandwidthController {
         $mbps = (int)($_POST['mbps'] ?? 0);
         if (!$vm || $mbps < 1) { http_response_code(400); echo 'bad input'; return; }
 
-        // Persist desired cap
         $pdo = DB::pdo();
         $pdo->prepare('REPLACE INTO egress_caps (vm_uuid, mbps, updated_at) VALUES (?, ?, NOW())')->execute([$vm, $mbps]);
 
-        // Find VM location
         $st = $pdo->prepare('SELECT node_id, name FROM vm_instances WHERE uuid=?');
         $st->execute([$vm]); $row = $st->fetch(\PDO::FETCH_ASSOC);
         if (!$row) { http_response_code(404); echo 'vm not found'; return; }
 
-        // Queue job on agent
         $payload = json_encode(['name'=>$row['name'], 'mbps'=>$mbps], JSON_UNESCAPED_SLASHES);
         $ins = $pdo->prepare("INSERT INTO jobs (node_id, type, payload, status, created_at) VALUES (?, 'NET_EGRESS_CAP_SET', ?, 'pending', NOW())");
         $ins->execute([(int)$row['node_id'], $payload]);
