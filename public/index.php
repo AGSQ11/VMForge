@@ -30,13 +30,12 @@ use VMForge\Controllers\MetricsController;
 use VMForge\Controllers\ISOController;
 use VMForge\Controllers\ReinstallController;
 use VMForge\Controllers\SubnetsController;
+use VMForge\Controllers\BandwidthController;
 
 $router = new Router();
 
-// Global security: CSRF for all non-GET routes except /api/* and /agent/*
 CsrfMiddleware::validate();
 
-// Optional: per-endpoint rate limit for API routes (120/min per-IP per-method+path)
 $path = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH) ?: '/';
 if (strpos($path, '/api/') === 0) {
     $ip = $_SERVER['REMOTE_ADDR'] ?? '0.0.0.0';
@@ -99,6 +98,9 @@ $router->post('/admin/reinstall', [ReinstallController::class, 'create']);
 
 $router->get('/admin/subnets', [SubnetsController::class, 'index']);
 $router->post('/admin/subnets', [SubnetsController::class, 'store']);
+
+$router->get('/admin/bandwidth', [BandwidthController::class, 'index']);
+$router->get('/admin/bandwidth.csv', [BandwidthController::class, 'csv']);
 
 // Health
 $router->get('/healthz', [HealthController::class, 'index']);
