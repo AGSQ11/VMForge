@@ -1,4 +1,3 @@
-\
 #!/usr/bin/env php
 <?php
 declare(strict_types=1);
@@ -21,8 +20,8 @@ while (true) {
     $job = pollJob($controller, $token);
     if (!$job) { sleep($poll); continue; }
     $id = (int)$job['id'];
-    $type = $job['type'];
-    $payload = json_decode($job['payload'] ?? '{}', true) ?: [];
+    $type = (string)($job['type'] ?? '');
+    $payload = json_decode((string)($job['payload'] ?? '{}'), true) ?: [];
     [$ok, $log] = executeJob($type, $payload, $bridge);
     ackJob($controller, $id, $ok ? 'done' : 'failed', is_array($log) ? json_encode($log) : (string)$log);
 }
@@ -117,8 +116,10 @@ function kvm_reinstall(array $p, string $bridge): array {
     $path = ISOStore::ensureLocal($isoId);
     if (!$path || !is_file($path)) return [false, 'iso not available'];
 
-    Shell::runf('virsh', ['shutdown', $name]); // best-effort
+    // Best-effort stop
+    Shell::runf('virsh', ['shutdown', $name]);
 
+    // Dump XML, inject cdrom + boot=cdrom, redefine, start
     [$cxml,$oxml,$exml] = Shell::runf('virsh', ['dumpxml', $name]);
     if ($cxml !== 0) return [false, $exml ?: $oxml];
     $tmp = sys_get_temp_dir()."/vmforge-{$name}-reinstall.xml";
@@ -132,9 +133,19 @@ function kvm_reinstall(array $p, string $bridge): array {
         }
     }
     if (preg_match('~<disk[^>]+device=\'cdrom\'~', $xml)) {
-        $xml = preg_replace('~<disk[^>]+device=\'cdrom\'[\s\S]*?</disk>~', "<disk type='file' device='cdrom'><driver name='qemu' type='raw'/><source file='{$path}'/><target dev='sda' bus='sata'/><readonly/></disk>", $xml, 1);
+        $xml = preg_replace(
+            '~<disk[^>]+device=\'cdrom\'[\s\S]*?</disk>~',
+            "<disk type='file' device='cdrom'><driver name='qemu' type='raw'/><source file='{$path}'/><target dev='sda' bus='sata'/><readonly/></disk>",
+            $xml,
+            1
+        );
     } else {
-        $xml = preg_replace('~</devices>~', "<disk type='file' device='cdrom'><driver name='qemu' type='raw'/><source file='{$path}'/><target dev='sda' bus='sata'/><readonly/></disk></devices>", $xml, 1);
+        $xml = preg_replace(
+            '~</devices>~',
+            "<disk type='file' device='cdrom'><driver name='qemu' type='raw'/><source file='{$path}'/><target dev='sda' bus='sata'/><readonly/></disk></devices>",
+            $xml,
+            1
+        );
     }
     file_put_contents($tmp, $xml);
     [$cdef,$odef,$edef] = Shell::runf('virsh', ['define', $tmp]);
@@ -225,12 +236,16 @@ function net_egress_cap_set(array $p, string $bridge): array {
     $if = agent_find_tap_for_vm($name);
     if (!$if) return [false, 'tap not found'];
 
-    Shell::runf('tc', ['qdisc', 'del', 'dev', $if, 'root']); // best-effort
-    $burst_kb = max(32, $mbps * 16);
+    // Best-effort cleanup
+    Shell::runf('tc', ['qdisc', 'del', 'dev', $if, 'root']);
+
+    $burst_kb = max(32, $mbps * 16); // rough: 16 KB per Mbps
     $rate = $mbps . 'mbit';
+    $burst = (string)$burst_kb . 'kb';
     $lat = '50ms';
+
     [$c,$o,$e] = Shell::runf('tc', ['qdisc', 'add', 'dev', $if, 'root', 'tbf',
-        'rate', $rate, 'burst', strval($burst_kb) + 'kb', 'latency', $lat]);
+        'rate', $rate, 'burst', $burst, 'latency', $lat]);
     if ($c !== 0) return [false, $e ?: $o];
     return [true, "egress cap set on {$if} to {$mbps} Mbps"];
 }
