@@ -1,16 +1,18 @@
 #!/usr/bin/env php
 <?php
 declare(strict_types=1);
+
 require __DIR__ . '/../src/bootstrap.php';
+
 use VMForge\Core\Env;
 use VMForge\Core\Shell;
 use VMForge\Services\ImageManager;
 use VMForge\Services\CloudInit;
 
 $controller = Env::get('AGENT_CONTROLLER_URL', 'http://localhost');
-$token = Env::get('AGENT_NODE_TOKEN', 'changeme');
-$bridge = Env::get('AGENT_BRIDGE', 'br0');
-$poll = (int)Env::get('AGENT_POLL_INTERVAL', '5');
+$token      = Env::get('AGENT_NODE_TOKEN', 'changeme');
+$bridge     = Env::get('AGENT_BRIDGE', 'br0');
+$poll       = (int)Env::get('AGENT_POLL_INTERVAL', '5');
 
 echo "VMForge Agent — an ENGINYRING project — starting...\n";
 
@@ -21,49 +23,64 @@ while (true) {
     $type = $job['type'];
     $payload = json_decode($job['payload'], true);
     [$status, $log] = executeJob($type, $payload, $bridge);
-    ackJob($controller, $id, $status ? 'done' : 'failed', $log);
+    ackJob($controller, $id, $status ? 'done' : 'failed', is_array($log) ? json_encode($log) : (string)$log);
 }
 
 function pollJob(string $controller, string $token): ?array {
     $ch = curl_init("{$controller}/agent/poll");
-    curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER=>true, CURLOPT_POST=>true, CURLOPT_POSTFIELDS=>['token'=>$token]]);
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER=>true,
+        CURLOPT_POST=>true,
+        CURLOPT_POSTFIELDS=>['token'=>$token],
+        CURLOPT_TIMEOUT=>20,
+    ]);
     $out = curl_exec($ch);
     if ($out === false) return null;
     $data = json_decode($out, true);
     return $data['job'] ?? null;
 }
+
 function ackJob(string $controller, int $id, string $status, string $log): void {
     $ch = curl_init("{$controller}/agent/ack");
-    curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER=>true, CURLOPT_POST=>true, CURLOPT_POSTFIELDS=>['id'=>$id,'status'=>$status,'log'=>$log]]);
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER=>true,
+        CURLOPT_POST=>true,
+        CURLOPT_POSTFIELDS=>['id'=>$id,'status'=>$status,'log'=>$log],
+        CURLOPT_TIMEOUT=>20,
+    ]);
     curl_exec($ch); curl_close($ch);
 }
+
 function executeJob(string $type, array $p, string $bridge): array {
     switch ($type) {
-        case 'KVM_CREATE': return kvm_create($p, $bridge);
-        case 'LXC_CREATE': return lxc_create($p, $bridge);
-        case 'KVM_CONSOLE_OPEN': return kvm_console_open($p, $bridge);
-        case 'KVM_CONSOLE_CLOSE': return kvm_console_close($p, $bridge);
-        case 'NET_SETUP': return net_setup($p, $bridge);
-        case 'SNAPSHOT_CREATE': return snapshot_create($p, $bridge);
-        case 'BACKUP_UPLOAD': return backup_upload($p, $bridge);
-        case 'BACKUP_RESTORE': return backup_restore($p, $bridge);
-        case 'KVM_START': return kvm_start($p, $bridge);
-        case 'KVM_STOP': return kvm_stop($p, $bridge);
-        case 'KVM_REBOOT': return kvm_reboot($p, $bridge);
-        case 'KVM_DELETE': return kvm_delete($p, $bridge);
-        case 'LXC_START': return lxc_start($p, $bridge);
-        case 'LXC_STOP': return lxc_stop($p, $bridge);
-        case 'LXC_DELETE': return lxc_delete($p, $bridge);
-        case 'NET_ANTISPOOF': return net_antispoof($p, $bridge);
-        default: return [false, "Unknown job type {$type}"];
+        case 'KVM_CREATE':             return kvm_create($p, $bridge);
+        case 'LXC_CREATE':             return lxc_create($p, $bridge);
+        case 'KVM_CONSOLE_OPEN':       return kvm_console_open($p, $bridge);
+        case 'KVM_CONSOLE_CLOSE':      return kvm_console_close($p, $bridge);
+        case 'NET_SETUP':              return net_setup($p, $bridge);
+        case 'SNAPSHOT_CREATE':        return snapshot_create($p, $bridge);
+        case 'BACKUP_UPLOAD':          return backup_upload($p, $bridge);
+        case 'BACKUP_RESTORE':         return backup_restore($p, $bridge);
+        case 'BACKUP_RESTORE_AS_NEW':  return backup_restore_as_new($p, $bridge);
+        case 'KVM_START':              return kvm_start($p, $bridge);
+        case 'KVM_STOP':               return kvm_stop($p, $bridge);
+        case 'KVM_REBOOT':             return kvm_reboot($p, $bridge);
+        case 'KVM_DELETE':             return kvm_delete($p, $bridge);
+        case 'LXC_START':              return lxc_start($p, $bridge);
+        case 'LXC_STOP':               return lxc_stop($p, $bridge);
+        case 'LXC_DELETE':             return lxc_delete($p, $bridge);
+        case 'NET_ANTISPOOF':          return net_antispoof($p, $bridge);
+        default:                       return [false, "Unknown job type {$type}"];
     }
 }
-function mac_from_uuid($uuid) {
+
+function mac_from_uuid(string $uuid): string {
     $hex = preg_replace('/[^a-f0-9]/i','', $uuid);
     $h = substr(hash('md5', $hex), 0, 10);
     $pairs = str_split($h, 2);
     return implode(':', array_merge(['02'], $pairs));
 }
+
 function kvm_create(array $p, string $bridge): array {
     $uuid  = $p['uuid'] ?? uniqid('vm-', true);
     $name  = $p['name'] ?? "vm-$uuid";
@@ -124,6 +141,7 @@ XML;
     if ($c2 !== 0) return [false, $e2 ?: $o2];
     return [true, "defined+started {$name} with cloud-init"];
 }
+
 function lxc_create(array $p, string $bridge): array {
     $name = $p['name'] ?? uniqid('ct-', true);
     $release = $p['release'] ?? 'bookworm';
@@ -138,6 +156,16 @@ function lxc_create(array $p, string $bridge): array {
     if ($c2 !== 0) return [false, $e2 ?: $o2];
     return [true, "created+started {$name}"];
 }
+
+function kvm_start($p,$b){$n=$p['name']??null;if(!$n)return[false,'missing vm name'];return Shell::run("virsh start ".escapeshellarg($n));}
+function kvm_stop($p,$b){$n=$p['name']??null;if(!$n)return[false,'missing vm name'];return Shell::run("virsh shutdown ".escapeshellarg($n)." || virsh destroy ".escapeshellarg($n));}
+function kvm_reboot($p,$b){$n=$p['name']??null;if(!$n)return[false,'missing vm name'];return Shell::run("virsh reboot ".escapeshellarg($n));}
+function kvm_delete($p,$b){$n=$p['name']??null;if(!$n)return[false,'missing vm name'];Shell::run("virsh destroy ".escapeshellarg($n)." || true");Shell::run("virsh undefine ".escapeshellarg($n)." --remove-all-storage || true");return [true,'deleted'];}
+
+function lxc_start($p,$b){$n=$p['name']??null;if(!$n)return[false,'missing ct name'];return Shell::run("lxc-start -n ".escapeshellarg($n));}
+function lxc_stop($p,$b){$n=$p['name']??null;if(!$n)return[false,'missing ct name'];return Shell::run("lxc-stop -n ".escapeshellarg($n));}
+function lxc_delete($p,$b){$n=$p['name']??null;if(!$n)return[false,'missing ct name'];Shell::run("lxc-stop -n ".escapeshellarg($n)." || true");return Shell::run("lxc-destroy -n ".escapeshellarg($n));}
+
 function kvm_console_open(array $p, string $bridge): array {
     $name = $p['name'] ?? null; if (!$name) return [false, 'missing vm name'];
     [$cd,$od,$ed] = Shell::run("virsh vncdisplay ".escapeshellarg($name));
@@ -151,12 +179,14 @@ function kvm_console_open(array $p, string $bridge): array {
     if ($cw !== 0) return [false, $ew ?: $ow];
     return [true, "port={$listen}"];
 }
+
 function kvm_console_close(array $p, string $bridge): array {
     $listen = (int)($p['listen_port'] ?? 0);
     if ($listen <= 0) return [false, 'missing listen_port'];
     [$ck,$ok,$ek] = Shell::run("fuser -k {$listen}/tcp || true");
     return [true, "closed={$listen}"];
 }
+
 function net_setup(array $p, string $bridge): array {
     $mode = $p['mode'] ?? 'nat';
     $br   = $p['bridge'] ?? 'br0';
@@ -175,6 +205,7 @@ function net_setup(array $p, string $bridge): array {
         return Shell::run("nft -f ".escapeshellarg($tmp));
     }
 }
+
 function snapshot_create(array $p, string $bridge): array {
     $name = $p['name'] ?? null;
     if (!$name) return [false, 'missing vm name'];
@@ -182,6 +213,7 @@ function snapshot_create(array $p, string $bridge): array {
     $cmd = "virsh snapshot-create-as --domain ".escapeshellarg($name)." ".escapeshellarg($snap)." --disk-only --atomic --no-metadata";
     return Shell::run($cmd);
 }
+
 function backup_upload(array $p, string $bridge): array {
     $name = $p['name'] ?? null; if (!$name) return [false,'missing vm name'];
     $target = $p['target'] ?? 'local';
@@ -199,6 +231,7 @@ function backup_upload(array $p, string $bridge): array {
     }
     return [true, $path];
 }
+
 function backup_restore(array $p, string $bridge): array {
     $name = $p['name'] ?? null; if (!$name) return [false,'missing vm name'];
     $src = $p['source'] ?? null; if (!$src) return [false, 'missing source'];
@@ -214,38 +247,60 @@ function backup_restore(array $p, string $bridge): array {
     }
     return Shell::run("qemu-img convert -O qcow2 ".escapeshellarg($src)." ".escapeshellarg($dest));
 }
-function kvm_start($p,$b){$n=$p['name']??null;if(!$n)return[false,'missing vm name'];return Shell::run("virsh start ".escapeshellarg($n));}
-function kvm_stop($p,$b){$n=$p['name']??null;if(!$n)return[false,'missing vm name'];return Shell::run("virsh shutdown ".escapeshellarg($n)." || virsh destroy ".escapeshellarg($n));}
-function kvm_reboot($p,$b){$n=$p['name']??null;if(!$n)return[false,'missing vm name'];return Shell::run("virsh reboot ".escapeshellarg($n));}
-function kvm_delete($p,$b){$n=$p['name']??null;if(!$n)return[false,'missing vm name'];Shell::run("virsh destroy ".escapeshellarg($n)." || true");Shell::run("virsh undefine ".escapeshellarg($n)." --remove-all-storage || true");return [true,'deleted'];}
-function lxc_start($p,$b){$n=$p['name']??null;if(!$n)return[false,'missing ct name'];return Shell::run("lxc-start -n ".escapeshellarg($n));}
-function lxc_stop($p,$b){$n=$p['name']??null;if(!$n)return[false,'missing ct name'];return Shell::run("lxc-stop -n ".escapeshellarg($n));}
-function lxc_delete($p,$b){$n=$p['name']??null;if(!$n)return[false,'missing ct name'];Shell::run("lxc-stop -n ".escapeshellarg($n)." || true");return Shell::run("lxc-destroy -n ".escapeshellarg($n));}
+
+function backup_restore_as_new(array $p, string $bridge): array {
+    $new = $p['new_name'] ?? null; if (!$new) return [false,'missing new_name'];
+    $src = $p['source'] ?? null;   if (!$src) return [false,'missing source'];
+
+    @mkdir("/var/lib/libvirt/images", 0755, true);
+    $dest = "/var/lib/libvirt/images/{$new}.qcow2";
+    $r = Shell::run("qemu-img convert -O qcow2 ".escapeshellarg($src)." ".escapeshellarg($dest));
+    if ($r[0] !== 0) return $r;
+
+    $xml = "<domain type='kvm'><name>{$new}</name><memory unit='MiB'>1024</memory><vcpu>1</vcpu>"
+         . "<os><type arch='x86_64'>hvm</type></os><devices>"
+         . "<disk type='file' device='disk'><driver name='qemu' type='qcow2'/>"
+         . "<source file='{$dest}'/><target dev='vda' bus='virtio'/></disk>"
+         . "<interface type='bridge'><source bridge='{$bridge}'/></interface>"
+         . "<graphics type='vnc' port='-1' autoport='yes'/></devices></domain>";
+    $tmp = sys_get_temp_dir()."/vmforge-restore-{$new}.xml";
+    file_put_contents($tmp, $xml);
+    return Shell::run("virsh define {$tmp} && virsh start {$new}");
+}
+
+function kvm_vnet_of(string $name): ?string {
+    // Get first vNIC name from domiflist
+    [$c,$o,$e] = Shell::run("virsh domiflist ".escapeshellarg($name)." | awk '/bridge/ {print $1, $3, $4}'");
+    if ($c !== 0 || trim($o) === '') return null;
+    foreach (explode("\n", trim($o)) as $line) {
+        $parts = preg_split('/\s+/', trim($line));
+        if (count($parts) >= 1) return $parts[0];
+    }
+    return null;
+}
 
 function net_antispoof(array $p, string $bridge): array {
-    $name = $p['name'] ?? null;
-    $mac = $p['mac'] ?? null;
-    $ip4 = $p['ip4'] ?? null;
-    if (!$name || !$mac) return [false,'missing name/mac'];
-    // Find vnet interface for this domain
-    $tries = 0; $ifname = '';
+    $name = $p['name'] ?? null; if (!$name) return [false,'missing name'];
+    $mac  = $p['mac']  ?? null; if (!$mac)  return [false,'missing mac'];
+    $ip4  = $p['ip4']  ?? null;
+
+    // Wait up to 15s for interface to exist
+    $tries = 0; $ifname = null;
     while ($tries < 15) {
-        [$c,$o,$e] = \VMForge\Core\Shell::run("virsh domiflist ".escapeshellarg($name)." | awk '/bridge/ {print $1, $3, $4}'");
-        if ($c===0 && trim($o)!=='') {
-            foreach (explode("\n", trim($o)) as $line) {
-                $parts = preg_split('/\s+/', trim($line));
-                if (count($parts) >= 3) { $ifname = $parts[0]; break; }
-            }
-        }
+        $ifname = kvm_vnet_of($name);
         if ($ifname) break;
         sleep(1); $tries++;
     }
     if (!$ifname) return [false,'cannot determine interface'];
-    // Ensure table exists
-    \VMForge\Core\Shell::run("nft list table bridge vmforge_antispoof || nft add table bridge vmforge_antispoof");
-    \VMForge\Core\Shell::run("nft list chain bridge vmforge_antispoof forward || nft add chain bridge vmforge_antispoof forward { type filter hook forward priority 0; policy accept; }");
-    // Drop frames not matching MAC/IP
-    \VMForge\Core\Shell::run("nft add rule bridge vmforge_antispoof forward iifname ".escapeshellarg($ifname)." ether saddr != ".escapeshellarg($mac)." drop || true");
-    if ($ip4) { \VMForge\Core\Shell::run("nft add rule bridge vmforge_antispoof forward iifname ".escapeshellarg($ifname)." ip saddr != ".escapeshellarg($ip4)." drop || true"); }
+
+    // Ensure nftables bridge table/chain
+    Shell::run("nft list table bridge vmforge_antispoof || nft add table bridge vmforge_antispoof");
+    Shell::run("nft list chain bridge vmforge_antispoof forward || nft add chain bridge vmforge_antispoof forward { type filter hook forward priority 0; policy accept; }");
+
+    // Add rules
+    Shell::run("nft add rule bridge vmforge_antispoof forward iifname ".escapeshellarg($ifname)." ether saddr != ".escapeshellarg($mac)." drop || true");
+    if ($ip4) {
+        Shell::run("nft add rule bridge vmforge_antispoof forward iifname ".escapeshellarg($ifname)." ip saddr != ".escapeshellarg($ip4)." drop || true");
+    }
     return [true, "antispoof set on {$ifname}"];
 }
