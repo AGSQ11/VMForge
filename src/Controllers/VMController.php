@@ -7,15 +7,21 @@ use VMForge\Models\VM;
 use VMForge\Models\Node;
 use VMForge\Models\Job;
 use VMForge\Services\IPAM;
+use VMForge\Models\Image;
 
 class VMController {
     public function index() {
         Auth::require();
         $vms = VM::all();
         $nodes = Node::all();
+        $images = Image::all();
         $nodeOptions = '';
         foreach ($nodes as $n) {
             $nodeOptions .= '<option value="'.$n['id'].'">'.htmlspecialchars($n['name']).'</option>';
+        }
+        $imageOptions = '';
+        foreach ($images as $img) {
+            $imageOptions .= '<option value="'.$img['id'].'">['.htmlspecialchars($img['type']).'] '.htmlspecialchars($img['name']).'</option>';
         }
         $rows = '';
         foreach ($vms as $v) {
@@ -33,9 +39,9 @@ class VMController {
             <input name="vcpus" type="number" placeholder="2" value="2" required>
             <input name="memory_mb" type="number" placeholder="2048" value="2048" required>
             <input name="disk_gb" type="number" placeholder="20" value="20" required>
+            <label>Image</label><select name="image_id" required>'+ $imageOptions +'</select>
             <input name="ip_address" placeholder="192.0.2.10">
             <input name="bridge" placeholder="br0" value="br0" required>
-            <input name="image_id" type="number" placeholder="1" value="1" required>
             <button type="submit">Create</button>
         </form></div>';
         View::render('VMs', $html);
@@ -56,7 +62,6 @@ class VMController {
             'bridge'=>$_POST['bridge'] ?? 'br0',
             'ip_address'=>$_POST['ip_address'] ?? ''
         ];
-        // Auto-allocate IPv4 if empty (first pool)
         if (empty($d['ip_address'])) {
             $pdo = \VMForge\Core\DB::pdo();
             $poolId = (int)($pdo->query("SELECT id FROM ip_pools ORDER BY id ASC LIMIT 1")->fetchColumn() ?: 0);
@@ -66,7 +71,6 @@ class VMController {
             }
         }
         VM::create($d);
-        // enqueue job
         $type = $d['type'] === 'lxc' ? 'LXC_CREATE' : 'KVM_CREATE';
         Job::enqueue($d['node_id'], $type, $d);
         header('Location: /admin/vms');

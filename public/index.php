@@ -10,6 +10,9 @@ use VMForge\Controllers\NodeController;
 use VMForge\Controllers\VMController;
 use VMForge\Controllers\AgentController;
 use VMForge\Controllers\APIController;
+use VMForge\Controllers\ImagesController;
+use VMForge\Controllers\IPPoolController;
+use VMForge\Controllers\TokensController;
 
 // Routes
 $router = new Router();
@@ -19,10 +22,22 @@ $router->get('/', [HomeController::class, 'index']);
 $router->get('/login', [AuthController::class, 'showLogin']);
 $router->post('/login', [AuthController::class, 'login']);
 $router->get('/logout', [AuthController::class, 'logout']);
+
 $router->get('/admin/nodes', [NodeController::class, 'index']);
 $router->post('/admin/nodes', [NodeController::class, 'store']);
+
 $router->get('/admin/vms', [VMController::class, 'index']);
 $router->post('/admin/vms', [VMController::class, 'store']);
+
+// New admin pages
+$router->get('/admin/images', [ImagesController::class, 'index']);
+$router->post('/admin/images', [ImagesController::class, 'store']);
+
+$router->get('/admin/ip-pools', [IPPoolController::class, 'index']);
+$router->post('/admin/ip-pools', [IPPoolController::class, 'store']);
+
+$router->get('/admin/api-tokens', [TokensController::class, 'index']);
+$router->post('/admin/api-tokens', [TokensController::class, 'store']);
 
 // Agent
 $router->post('/agent/poll', [AgentController::class, 'poll']);
