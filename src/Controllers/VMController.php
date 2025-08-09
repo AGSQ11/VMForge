@@ -26,10 +26,22 @@ class VMController {
         $rows = '';
         foreach ($vms as $v) {
             $console = $v['type']==='kvm' ? '<a href="/console/open?uuid='.htmlspecialchars($v['uuid']).'">Open Console</a>' : '-';
-            $rows .= '<tr><td>'.htmlspecialchars($v['uuid']).'</td><td>'.htmlspecialchars($v['name']).'</td><td>'.htmlspecialchars($v['type']).'</td><td>'.htmlspecialchars((string)$v['vcpus']).'</td><td>'.htmlspecialchars((string)$v['memory_mb']).'</td><td>'.htmlspecialchars($v['ip_address']).'</td><td>'.$console.'</td></tr>';
+            $actions = '<form method="post" action="/admin/snapshots" style="display:inline;margin-right:8px">'
+                     . '<input type="hidden" name="csrf" value="<?php echo htmlspecialchars(\VMForge\Core\Security::csrfToken()); ?>">'
+                     . '<input type="hidden" name="uuid" value="'.htmlspecialchars($v['uuid']).'">'
+                     . '<input type="hidden" name="vm_name" value="'.htmlspecialchars($v['name']).'">'
+                     . '<input type="hidden" name="node_id" value="'.(int)$v['node_id'].'">'
+                     . '<button type="submit">Snapshot</button></form>';
+            $actions .= '<form method="post" action="/admin/backups" style="display:inline">'
+                     . '<input type="hidden" name="csrf" value="<?php echo htmlspecialchars(\VMForge\Core\Security::csrfToken()); ?>">'
+                     . '<input type="hidden" name="vm_name" value="'.htmlspecialchars($v['name']).'">'
+                     . '<input type="hidden" name="node_id" value="'.(int)$v['node_id'].'">'
+                     . '<select name="target"><option value="local">local</option><option value="s3">s3</option></select>'
+                     . '<button type="submit">Backup</button></form>';
+            $rows .= '<tr><td>'.htmlspecialchars($v['uuid']).'</td><td>'.htmlspecialchars($v['name']).'</td><td>'.htmlspecialchars($v['type']).'</td><td>'.htmlspecialchars((string)$v['vcpus']).'</td><td>'.htmlspecialchars((string)$v['memory_mb']).'</td><td>'.htmlspecialchars($v['ip_address']).'</td><td>'.$console.'</td><td>'.$actions.'</td></tr>';
         }
         $html = '<div class="card"><h2>VMs</h2>
-        <table class="table"><thead><tr><th>UUID</th><th>Name</th><th>Type</th><th>vCPU</th><th>RAM(MB)</th><th>IP</th><th>Console</th></tr></thead><tbody>'.$rows.'</tbody></table>
+        <table class="table"><thead><tr><th>UUID</th><th>Name</th><th>Type</th><th>vCPU</th><th>RAM(MB)</th><th>IP</th><th>Console</th><th>Actions</th></tr></thead><tbody>'.$rows.'</tbody></table>
         </div>
         <div class="card"><h3>Create Instance</h3>
         <form method="post" action="/admin/vms">

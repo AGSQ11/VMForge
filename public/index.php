@@ -15,6 +15,7 @@ use VMForge\Controllers\IPPoolController;
 use VMForge\Controllers\TokensController;
 use VMForge\Controllers\ConsoleController;
 use VMForge\Controllers\BackupController;
+use VMForge\Controllers\NetworkController;
 use VMForge\Controllers\SnapshotController;
 
 $router = new Router();
@@ -37,11 +38,15 @@ $router->post('/admin/ip-pools', [IPPoolController::class, 'store']);
 $router->get('/admin/api-tokens', [TokensController::class, 'index']);
 $router->post('/admin/api-tokens', [TokensController::class, 'store']);
 
+$router->get('/admin/network', [NetworkController::class, 'index']);
+$router->post('/admin/network', [NetworkController::class, 'store']);
+
 $router->get('/console/open', [ConsoleController::class, 'open']);
 $router->get('/console/redirect', [ConsoleController::class, 'redirect']);
 $router->get('/console/close', [ConsoleController::class, 'close']);
 
 $router->get('/admin/backups', [BackupController::class, 'index']);
+$router->post('/admin/backups', [BackupController::class, 'create']);
 $router->post('/admin/snapshots', [SnapshotController::class, 'create']);
 
 // Agent

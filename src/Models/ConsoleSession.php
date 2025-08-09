@@ -5,8 +5,8 @@ use PDO;
 
 class ConsoleSession {
     public static function create(array $d): int {
-        $st = DB::pdo()->prepare('INSERT INTO console_sessions(vm_uuid,node_id,token,listen_port,expires_at) VALUES (?,?,?,?,?)');
-        $st->execute([$d['vm_uuid'],$d['node_id'],$d['token'],$d['listen_port'],$d['expires_at']]);
+        $st = DB::pdo()->prepare('INSERT INTO console_sessions(vm_uuid,node_id,requester_ip,token,listen_port,expires_at) VALUES (?,?,?,?,?,?)');
+        $st->execute([$d['vm_uuid'],$d['node_id'],$d['requester_ip'],$d['token'],$d['listen_port'],$d['expires_at']]);
         return (int)DB::pdo()->lastInsertId();
     }
     public static function findByToken(string $token): ?array {

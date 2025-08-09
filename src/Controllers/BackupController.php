@@ -18,4 +18,16 @@ class BackupController {
         $html = '<div class="card"><h2>Backups</h2><table class="table"><thead><tr><th>ID</th><th>VM</th><th>Node</th><th>Snapshot</th><th>Location</th><th>Created</th></tr></thead><tbody>'.$rows.'</tbody></table></div>';
         View::render('Backups', $html);
     }
+    public function create() {
+        Auth::require();
+        \VMForge\Core\Security::requireCsrf($_POST['csrf'] ?? null);
+        $node = (int)($_POST['node_id'] ?? 0);
+        $vmname = $_POST['vm_name'] ?? '';
+        if (!$node || !$vmname) { http_response_code(400); echo 'missing'; return; }
+        $snap = 'manual-' . date('Ymd-His');
+        Job::enqueue($node, 'SNAPSHOT_CREATE', ['name'=>$vmname, 'snapshot'=>$snap]);
+        $target = ($_POST['target'] ?? 'local') === 's3' ? 's3' : 'local';
+        Job::enqueue($node, 'BACKUP_UPLOAD', ['name'=>$vmname, 'snapshot'=>$snap, 'target'=>$target]);
+        header('Location: /admin/backups');
+    }
 }
