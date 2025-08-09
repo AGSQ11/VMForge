@@ -1,29 +1,59 @@
 <?php
 namespace VMForge\Core;
-use PDO;
+
+use VMForge\Core\Env;
+use VMForge\Core\DB;
 
 class RateLimiter {
     /**
-     * Throttle by key within a 60s window. On breach: 429 and exit.
+     * Throttle a key to $max events per $windowSec seconds.
+     * Throws 429 if exceeded.
      */
-    public static function throttle(string $key, int $maxPerMinute = 120): void {
+    public static function throttle(string $key, int $maxPerWindow = 60, int $windowSec = 60): void {
+        // Prefer Redis if available
+        $redisHost = Env::get('REDIS_HOST', '');
+        if ($redisHost !== '') {
+            $r = new \Redis();
+            $r->connect($redisHost, (int)Env::get('REDIS_PORT','6379'));
+            $prefix = 'vmforge:rl:';
+            $k = $prefix . $key;
+            $cnt = $r->incr($k);
+            if ($cnt === 1) $r->expire($k, $windowSec);
+            if ($cnt > $maxPerWindow) {
+                http_response_code(429);
+                header('Retry-After: ' . $windowSec);
+                echo 'rate limit exceeded';
+                exit;
+            }
+            return;
+        }
+
+        // Fallback: SQL counter with window
         $pdo = DB::pdo();
-        // Use current minute bucket
-        $bucketStart = date('Y-m-d H:i:00'); // align to minute
-        // Try insert; if exists, update count
-        $st = $pdo->prepare('INSERT INTO rate_limits(rl_key, bucket_start, count) VALUES (?,?,1)
-                             ON DUPLICATE KEY UPDATE count = count + 1, id=LAST_INSERT_ID(id)');
-        $st->execute([$key, $bucketStart]);
-        $id = (int)$pdo->lastInsertId();
-        // Read back count
-        $st2 = $pdo->prepare('SELECT count FROM rate_limits WHERE id=?');
-        $st2->execute([$id]);
-        $count = (int)$st2->fetchColumn();
-        if ($count > $maxPerMinute) {
-            http_response_code(429);
-            header('Retry-After: 60');
-            echo 'rate limit exceeded';
-            exit;
+        $pdo->exec('CREATE TABLE IF NOT EXISTS rate_limits (k VARCHAR(190) PRIMARY KEY, cnt INT NOT NULL, window_start TIMESTAMP NOT NULL)');
+        $now = date('Y-m-d H:i:s');
+        $st = $pdo->prepare('SELECT cnt, window_start FROM rate_limits WHERE k=?');
+        $st->execute([$key]);
+        $row = $st->fetch(\PDO::FETCH_ASSOC);
+        if ($row) {
+            $start = strtotime($row['window_start']);
+            if (time() - $start >= $windowSec) {
+                $upd = $pdo->prepare('UPDATE rate_limits SET cnt=1, window_start=? WHERE k=?');
+                $upd->execute([$now, $key]);
+                return;
+            }
+            $cnt = (int)$row['cnt'] + 1;
+            if ($cnt > $maxPerWindow) {
+                http_response_code(429);
+                header('Retry-After: ' . ($windowSec - (time()-$start)));
+                echo 'rate limit exceeded';
+                exit;
+            }
+            $upd = $pdo->prepare('UPDATE rate_limits SET cnt=? WHERE k=?');
+            $upd->execute([$cnt, $key]);
+        } else {
+            $ins = $pdo->prepare('INSERT INTO rate_limits (k, cnt, window_start) VALUES (?, 1, ?)');
+            $ins->execute([$key, $now]);
         }
     }
 }
