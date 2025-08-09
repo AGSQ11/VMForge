@@ -89,9 +89,9 @@ function kvm_reinstall(array $p, string $bridge): array {
     if (!$path || !file_exists($path)) return [false, 'iso not available'];
 
     // Stop VM, attach ISO as cdrom, set boot dev to cdrom first, start VM
-    \VMForge\Core\Shell::run("virsh shutdown ".escapeshellarg($name)." || true");
+    \VMForge\Core\Shell::runf("virsh shutdown ".escapeshellarg($name)." || true");
     // ensure defined
-    [$cxml,$oxml,$exml] = \VMForge\Core\Shell::run("virsh dumpxml ".escapeshellarg($name));
+    [$cxml,$oxml,$exml] = \VMForge\Core\Shell::runf("virsh dumpxml ".escapeshellarg($name));
     if ($cxml !== 0) return [false, $exml ?: $oxml];
     $tmp = sys_get_temp_dir()."/vmforge-{$name}-reinstall.xml";
     // Add or replace cdrom + boot order
@@ -113,7 +113,7 @@ function kvm_reinstall(array $p, string $bridge): array {
     file_put_contents($tmp, $xml);
     [$cdef,$odef,$edef] = \VMForge\Core\Shell::runf('virsh', ['define', $tmp]);
     if ($cdef !== 0) return [false, $edef ?: $odef];
-    [$cs,$os,$es] = \VMForge\Core\Shell::run("virsh start ".escapeshellarg($name));
+    [$cs,$os,$es] = \VMForge\Core\Shell::runf("virsh start ".escapeshellarg($name));
     if ($cs !== 0) return [false, $es ?: $os];
     return [true, "reinstall: ISO attached and VM started"];
 }
