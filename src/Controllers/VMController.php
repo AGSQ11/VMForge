@@ -10,6 +10,7 @@ use VMForge\Models\VM;
 use VMForge\Models\Node;
 use VMForge\Models\Job;
 use VMForge\Services\IPAM;
+use VMForge\Services\Storage;
 use VMForge\Models\Image;
 use PDO;
 
@@ -27,14 +28,13 @@ class VMController {
         }
         $nodes = Node::all();
         $images = Image::all();
+        $pools = Storage::all();
         $nodeOptions = '';
-        foreach ($nodes as $n) {
-            $nodeOptions .= '<option value="'.$n['id'].'">'.htmlspecialchars($n['name']).'</option>';
-        }
+        foreach ($nodes as $n) { $nodeOptions .= '<option value="'.$n['id'].'">'.htmlspecialchars($n['name']).'</option>'; }
         $imageOptions = '';
-        foreach ($images as $img) {
-            $imageOptions .= '<option value="'.$img['id'].'">['.htmlspecialchars($img['type']).'] '.htmlspecialchars($img['name']).'</option>';
-        }
+        foreach ($images as $img) { $imageOptions .= '<option value="'.$img['id'].'">['.htmlspecialchars($img['type']).'] '.htmlspecialchars($img['name']).'</option>'; }
+        $poolOptions = '<option value="">(default qcow2)</option>';
+        foreach ($pools as $p) { $poolOptions .= '<option value="'.$p['id'].'">'.htmlspecialchars($p['name']).' ('.htmlspecialchars($p['driver']).')</option>'; }
         $rows = '';
         foreach ($vms as $v) {
             $console = $v['type']==='kvm' ? '<a href="/console/open?uuid='.htmlspecialchars($v['uuid']).'">Open Console</a>' : '-';
@@ -54,8 +54,10 @@ class VMController {
             <input name="memory_mb" type="number" placeholder="2048" value="2048" required>
             <input name="disk_gb" type="number" placeholder="20" value="20" required>
             <label>Image</label><select name="image_id" required>'+ $imageOptions +'</select>
+            <label>Storage Pool</label><select name="storage_pool_id">'+ $poolOptions +'</select>
             <input name="ip_address" placeholder="192.0.2.10">
             <input name="bridge" placeholder="br0" value="br0" required>
+            <input name="vlan_tag" type="number" placeholder="(optional VLAN tag)">
             <button type="submit">Create</button>
         </form></div>';
         View::render('VMs', $html);
@@ -73,7 +75,6 @@ class VMController {
         $uuid = UUID::v4();
         $pid = Policy::requireProjectSelected();
         $user = Auth::user();
-        Policy::requireMember($user, $pid);
         $pdo = DB::pdo();
         $q = $pdo->prepare('SELECT max_vms, max_vcpus, max_ram_mb, max_disk_gb FROM quotas WHERE project_id=?');
         $q->execute([$pid]);
@@ -82,44 +83,36 @@ class VMController {
             $agg = $pdo->prepare('SELECT COUNT(*) as vms, COALESCE(SUM(vcpus),0) vcpus, COALESCE(SUM(memory_mb),0) ram, COALESCE(SUM(disk_gb),0) disk FROM vm_instances WHERE project_id=?');
             $agg->execute([$pid]);
             $cur = $agg->fetch(PDO::FETCH_ASSOC);
+            if (!empty($quota['max_vms']) && ((int)$cur['vms'] + 1) > (int)$quota['max_vms']) die('quota exceeded: max_vms');
+            if (!empty($quota['max_vcpus']) && ((int)$cur['vcpus'] + (int)$_POST['vcpus']) > (int)$quota['max_vcpus']) die('quota exceeded: max_vcpus');
+            if (!empty($quota['max_ram_mb']) && ((int)$cur['ram'] + (int)$_POST['memory_mb']) > (int)$quota['max_ram_mb']) die('quota exceeded: max_ram_mb');
+            if (!empty($quota['max_disk_gb']) && ((int)$cur['disk'] + (int)$_POST['disk_gb']) > (int)$quota['max_disk_gb']) die('quota exceeded: max_disk_gb');
+        }
+        $ip = $_POST['ip_address'] ?? '';
+        if ($ip === '') {
+            $poolId = (int)($pdo->query("SELECT id FROM ip_pools ORDER BY id ASC LIMIT 1")->fetchColumn() ?: 0);
+            if ($poolId) { $ipTry = \VMForge\Services\IPAM::nextFree($poolId); if ($ipTry) $ip = $ipTry; }
+        }
+        $poolId = $_POST['storage_pool_id'] !== '' ? (int)$_POST['storage_pool_id'] : null;
+        $storageType = 'qcow2';
+        if ($poolId) {
+            $st = $pdo->prepare('SELECT driver FROM storage_pools WHERE id=? LIMIT 1');
+            $st->execute([$poolId]); $driver = (string)$st->fetchColumn();
+            if ($driver) $storageType = $driver;
         }
         $d = [
-            'uuid'=>$uuid,
-            'project_id'=>$pid,
-            'node_id'=>(int)($_POST['node_id'] ?? 1),
-            'name'=>$_POST['name'] ?? 'vm',
-            'type'=>$_POST['type'] ?? 'kvm',
-            'vcpus'=>(int)($_POST['vcpus'] ?? 2),
-            'memory_mb'=>(int)($_POST['memory_mb'] ?? 2048),
-            'disk_gb'=>(int)($_POST['disk_gb'] ?? 20),
-            'image_id'=>(int)($_POST['image_id'] ?? 1),
-            'bridge'=>$_POST['bridge'] ?? 'br0',
-            'ip_address'=>$_POST['ip_address'] ?? ''
+            'uuid'=>$uuid,'project_id'=>$pid,'node_id'=>(int)$_POST['node_id'],'name'=>$_POST['name'],
+            'type'=>$_POST['type'] ?? 'kvm','vcpus'=>(int)$_POST['vcpus'],'memory_mb'=>(int)$_POST['memory_mb'],
+            'disk_gb'=>(int)$_POST['disk_gb'],'image_id'=>(int)$_POST['image_id'],
+            'bridge'=>$_POST['bridge'] ?? 'br0','ip_address'=>$ip,
+            'storage_type'=>$storageType,'storage_pool_id'=>$poolId,'vlan_tag'=> $_POST['vlan_tag'] !== '' ? (int)$_POST['vlan_tag'] : null
         ];
-        if ($quota) {
-            if (!empty($quota['max_vms']) && ((int)$cur['vms'] + 1) > (int)$quota['max_vms']) die('quota exceeded: max_vms');
-            if (!empty($quota['max_vcpus']) && ((int)$cur['vcpus'] + $d['vcpus']) > (int)$quota['max_vcpus']) die('quota exceeded: max_vcpus');
-            if (!empty($quota['max_ram_mb']) && ((int)$cur['ram'] + $d['memory_mb']) > (int)$quota['max_ram_mb']) die('quota exceeded: max_ram_mb');
-            if (!empty($quota['max_disk_gb']) && ((int)$cur['disk'] + $d['disk_gb']) > (int)$quota['max_disk_gb']) die('quota exceeded: max_disk_gb');
-        }
-        if (empty($d['ip_address'])) {
-            $poolId = (int)($pdo->query("SELECT id FROM ip_pools ORDER BY id ASC LIMIT 1")->fetchColumn() ?: 0);
-            if ($poolId) {
-                $ip = \VMForge\Services\IPAM::nextFree($poolId);
-                if ($ip) { $d['ip_address'] = $ip; }
-            }
-        }
         $d['mac_address'] = $this->macFromUuid($uuid);
-        \VMForge\Models\VM::create($d);
+        VM::create($d);
         $type = $d['type'] === 'lxc' ? 'LXC_CREATE' : 'KVM_CREATE';
-        $payload = $d; $payload['mac_address'] = $d['mac_address'];
-        \VMForge\Models\Job::enqueue($d['node_id'], $type, $payload);
+        Job::enqueue($d['node_id'], $type, $d);
         if ($d['type'] === 'kvm') {
-            \VMForge\Models\Job::enqueue($d['node_id'], 'NET_ANTISPOOF', [
-                'name'=>$d['name'],
-                'ip4'=>$d['ip_address'] ?? null,
-                'mac'=>$d['mac_address']
-            ]);
+            Job::enqueue($d['node_id'], 'NET_ANTISPOOF', ['name'=>$d['name'],'ip4'=>$d['ip_address'] ?? null,'mac'=>$d['mac_address']]);
         }
         header('Location: /admin/vms');
     }

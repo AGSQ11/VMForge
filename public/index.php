@@ -22,6 +22,8 @@ use VMForge\Controllers\SnapshotController;
 use VMForge\Controllers\ProjectsController;
 use VMForge\Controllers\RestoreController;
 use VMForge\Controllers\HealthController;
+use VMForge\Controllers\StorageController;
+use VMForge\Controllers\DiskController;
 
 $router = new Router();
 
@@ -67,6 +69,10 @@ $router->get('/admin/projects', [ProjectsController::class, 'index']);
 $router->post('/admin/projects', [ProjectsController::class, 'store']);
 $router->post('/admin/projects/switch', [ProjectsController::class, 'switch']);
 $router->post('/admin/projects/quotas', [ProjectsController::class, 'quotas']);
+
+$router->get('/admin/storage', [StorageController::class, 'index']);
+$router->post('/admin/storage', [StorageController::class, 'store']);
+$router->post('/admin/disk-resize', [DiskController::class, 'resize']);
 
 // Health
 $router->get('/healthz', [HealthController::class, 'index']);

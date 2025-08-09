@@ -18,6 +18,8 @@ class View {
             . '<a href="/admin/network">Network</a> '
             . '<a href="/admin/jobs">Jobs</a> '
             . '<a href="/admin/projects">Projects</a> '
+            . '<a href="/admin/storage">Storage</a> '
+            . '<a href="/admin/metrics">Metrics</a> '
             . '<a href="/settings/2fa">2FA</a> '
             . '<a href="/logout">Logout</a>'
             . '</div></div>';
