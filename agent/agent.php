@@ -46,6 +46,8 @@ function executeJob(string $type, array $p, string $bridge): array {
     switch ($type) {
         case 'KVM_CREATE': return kvm_create($p, $bridge);
         case 'LXC_CREATE': return lxc_create($p, $bridge);
+        case 'KVM_CONSOLE_OPEN': return kvm_console_open($p, $bridge);
+        case 'KVM_CONSOLE_CLOSE': return kvm_console_close($p, $bridge);
         default: return [false, "Unknown job type {$type}"];
     }
 }
@@ -120,4 +122,27 @@ function lxc_create(array $p, string $bridge): array {
     [$c2,$o2,$e2] = Shell::run("lxc-start -n {$name}");
     if ($c2 !== 0) return [false, $e2 ?: $o2];
     return [true, "created+started {$name}"];
+}
+
+// Console helpers
+function kvm_console_open(array $p, string $bridge): array {
+    $name = $p['name'] ?? null;
+    if (!$name) return [false, 'missing vm name'];
+    [$cd,$od,$ed] = Shell::run("virsh vncdisplay ".escapeshellarg($name));
+    if ($cd !== 0) return [false, $ed ?: $od];
+    $display = trim($od); // like :1
+    if (!preg_match('/:(\d+)/', $display, $m)) return [false, 'bad vnc display'];
+    $vnc = 5900 + (int)$m[1];
+    $listen = (int)($p['listen_port'] ?? 6080);
+    $cmd = "websockify --daemon --web /usr/share/novnc 0.0.0.0:{$listen} 127.0.0.1:{$vnc}";
+    [$cw,$ow,$ew] = Shell::run($cmd);
+    if ($cw !== 0) return [false, $ew ?: $ow];
+    return [true, "port={$listen}"];
+}
+
+function kvm_console_close(array $p, string $bridge): array {
+    $listen = (int)($p['listen_port'] ?? 0);
+    if ($listen <= 0) return [false, 'missing listen_port'];
+    [$ck,$ok,$ek] = Shell::run("fuser -k {$listen}/tcp || true");
+    return [true, "closed={$listen}"];
 }

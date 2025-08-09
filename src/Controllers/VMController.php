@@ -25,10 +25,11 @@ class VMController {
         }
         $rows = '';
         foreach ($vms as $v) {
-            $rows .= '<tr><td>'.htmlspecialchars($v['uuid']).'</td><td>'.htmlspecialchars($v['name']).'</td><td>'.htmlspecialchars($v['type']).'</td><td>'.htmlspecialchars((string)$v['vcpus']).'</td><td>'.htmlspecialchars((string)$v['memory_mb']).'</td><td>'.htmlspecialchars($v['ip_address']).'</td></tr>';
+            $console = $v['type']==='kvm' ? '<a href="/console/open?uuid='.htmlspecialchars($v['uuid']).'">Open Console</a>' : '-';
+            $rows .= '<tr><td>'.htmlspecialchars($v['uuid']).'</td><td>'.htmlspecialchars($v['name']).'</td><td>'.htmlspecialchars($v['type']).'</td><td>'.htmlspecialchars((string)$v['vcpus']).'</td><td>'.htmlspecialchars((string)$v['memory_mb']).'</td><td>'.htmlspecialchars($v['ip_address']).'</td><td>'.$console.'</td></tr>';
         }
         $html = '<div class="card"><h2>VMs</h2>
-        <table class="table"><thead><tr><th>UUID</th><th>Name</th><th>Type</th><th>vCPU</th><th>RAM(MB)</th><th>IP</th></tr></thead><tbody>'.$rows.'</tbody></table>
+        <table class="table"><thead><tr><th>UUID</th><th>Name</th><th>Type</th><th>vCPU</th><th>RAM(MB)</th><th>IP</th><th>Console</th></tr></thead><tbody>'.$rows.'</tbody></table>
         </div>
         <div class="card"><h3>Create Instance</h3>
         <form method="post" action="/admin/vms">
