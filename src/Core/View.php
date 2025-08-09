@@ -18,6 +18,8 @@ class View {
             . '<a href="/admin/backups">Backups</a> '
             . '<a href="/admin/network">Network</a> '
             . '<a href="/admin/subnets">Subnets</a> '
+            . '<a href="/admin/subnets6">IPv6</a> '
+            . '<a href="/admin/bandwidth">Bandwidth</a> '
             . '<a href="/admin/zfs-repos">ZFS Repos</a> '
             . '<a href="/admin/jobs">Jobs</a> '
             . '<a href="/admin/projects">Projects</a> '

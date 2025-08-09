@@ -32,6 +32,7 @@ class VMController {
         $images = Image::all();
         $pools = Storage::all();
         $subnets = $pdo->query('SELECT id,name,cidr FROM subnets ORDER BY id DESC')->fetchAll(PDO::FETCH_ASSOC);
+        $subnets6 = $pdo->query('SELECT id,name,prefix FROM subnets6 ORDER BY id DESC')->fetchAll(PDO::FETCH_ASSOC);
         $nodeOptions = '';
         foreach ($nodes as $n) { $nodeOptions .= '<option value="'.$n['id'].'">'.htmlspecialchars($n['name']).'</option>'; }
         $imageOptions = '';
@@ -40,6 +41,8 @@ class VMController {
         foreach ($pools as $p) { $poolOptions .= '<option value="'.$p['id'].'">'.htmlspecialchars($p['name']).' ('.htmlspecialchars($p['driver']).')</option>'; }
         $subnetOptions = '<option value="">(none)</option>';
         foreach ($subnets as $s) { $subnetOptions .= '<option value="'.$s['id'].'">'.htmlspecialchars($s['name']).' — '.htmlspecialchars($s['cidr']).'</option>'; }
+        $subnet6Options = '<option value="">(none)</option>';
+        foreach ($subnets6 as $s6) { $subnet6Options .= '<option value="'.$s6['id'].'">'.htmlspecialchars($s6['name']).' — '.htmlspecialchars($s6['prefix']).'</option>'; }
         $rows = '';
         foreach ($vms as $v) {
             $console = $v['type']==='kvm' ? '<a href="/console/open?uuid='.htmlspecialchars($v['uuid']).'">Open Console</a>' : '-';
@@ -60,8 +63,9 @@ class VMController {
             <input name="disk_gb" type="number" placeholder="20" value="20" required>
             <label>Image</label><select name="image_id" required>'+ $imageOptions +'</select>
             <label>Storage Pool</label><select name="storage_pool_id">'+ $poolOptions +'</select>
-            <label>Subnet</label><select name="subnet_id">'+ $subnetOptions +'</select>
-            <input name="ip_address" placeholder="(optional override) 192.0.2.10">
+            <label>IPv4 Subnet</label><select name="subnet_id">'+ $subnetOptions +'</select>
+            <input name="ip_address" placeholder="(optional IPv4 override) 192.0.2.10">
+            <label>IPv6 Subnet</label><select name="subnet6_id">'+ $subnet6Options +'</select>
             <input name="bridge" placeholder="br0" value="br0" required>
             <input name="vlan_tag" type="number" placeholder="(optional VLAN tag)">
             <button type="submit">Create</button>
@@ -95,6 +99,7 @@ class VMController {
             if (!empty($quota['max_disk_gb']) && ((int)$cur['disk'] + (int)$_POST['disk_gb']) > (int)$quota['max_disk_gb']) die('quota exceeded: max_disk_gb');
         }
         $subnetId = $_POST['subnet_id'] !== '' ? (int)$_POST['subnet_id'] : null;
+        $subnet6Id = $_POST['subnet6_id'] !== '' ? (int)$_POST['subnet6_id'] : null;
         $selectedIp = trim($_POST['ip_address'] ?? '');
         $ip = $selectedIp;
         $gateway = '';
@@ -117,7 +122,7 @@ class VMController {
             'uuid'=>$uuid,'project_id'=>$pid,'node_id'=>(int)$_POST['node_id'],'name'=>$_POST['name'],
             'type'=>$_POST['type'] ?? 'kvm','vcpus'=>(int)$_POST['vcpus'],'memory_mb'=>(int)$_POST['memory_mb'],
             'disk_gb'=>(int)$_POST['disk_gb'],'image_id'=>(int)$_POST['image_id'],
-            'bridge'=>$_POST['bridge'] ?? 'br0','ip_address'=>$ip,'subnet_id'=>$subnetId,
+            'bridge'=>$_POST['bridge'] ?? 'br0','ip_address'=>$ip,'subnet_id'=>$subnetId,'subnet6_id'=>$subnet6Id,
             'storage_type'=>$storageType,'storage_pool_id'=>$poolId,'vlan_tag'=> $_POST['vlan_tag'] !== '' ? (int)$_POST['vlan_tag'] : null
         ];
         $mac = $this->macFromUuid($uuid);
@@ -128,11 +133,25 @@ class VMController {
         if ($d['type'] === 'kvm') {
             Job::enqueue($d['node_id'], 'NET_ANTISPOOF', ['name'=>$d['name'],'ip4'=>$d['ip_address'] ?? null,'mac'=>$d['mac_address']]);
         }
-        // If subnet had a gateway, ensure host has it assigned
+        // If IPv4 subnet had a gateway, ensure host has it assigned
         if ($subnetId && $gateway !== '') {
             Job::enqueue($d['node_id'], 'NET_ROUTE_GW', ['bridge'=>$d['bridge'], 'gateway'=>$gateway]);
         }
-        // rDNS (optional)
+        // IPv6 RA setup if selected
+        if ($subnet6Id) {
+            $s6 = $pdo->prepare('SELECT prefix, gateway_ip6, ra_enabled, dns_servers FROM subnets6 WHERE id=?');
+            $s6->execute([$subnet6Id]);
+            $row = $s6->fetch(PDO::FETCH_ASSOC);
+            if ($row && (int)$row['ra_enabled'] === 1) {
+                Job::enqueue($d['node_id'], 'NET6_RA_SETUP', [
+                    'bridge'=>$d['bridge'],
+                    'prefix'=>$row['prefix'],
+                    'gateway'=>$row['gateway_ip6'],
+                    'dns'=>$row['dns_servers'] ?? ''
+                ]);
+            }
+        }
+        // rDNS (IPv4 only for now)
         $suffix = $_ENV['RDNS_FQDN_SUFFIX'] ?? '';
         if ($suffix !== '' && $ip !== '') {
             \VMForge\Services\PDNS::setPTR($ip, $d['name'].'.'.$suffix);

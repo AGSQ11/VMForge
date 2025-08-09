@@ -1,0 +1,44 @@
+<?php
+// Add to agent/agent.php — IPv6 RA setup (SLAAC) for a bridge and /64 prefix
+// 1) Add dispatch case:
+// case 'NET6_RA_SETUP':         return net6_ra_setup($p, $bridge);
+//
+// 2) Add function:
+
+function net6_ra_setup(array $p, string $defaultBridge): array {
+    $br = $p['bridge'] ?? $defaultBridge;
+    $prefix = $p['prefix'] ?? null;
+    $gw = $p['gateway'] ?? null; // e.g., 2001:db8:1234::1
+    $dns = trim($p['dns'] ?? '');
+    if (!$prefix || !$gw) return [false, 'missing prefix/gateway'];
+    // require /64
+    if (!preg_match('~^([0-9a-fA-F:]+)/64$~', $prefix)) return [false, 'only /64 supported'];
+
+    // enable IPv6 forwarding
+    \VMForge\Core\Shell::run("sysctl -w net.ipv6.conf.all.forwarding=1");
+    // assign router address to bridge (idempotent)
+    \VMForge\Core\Shell::run("ip -6 addr show dev ".escapeshellarg($br)." | grep -q ".escapeshellarg($gw)."/64 || ip -6 addr add ".escapeshellarg($gw)."/64 dev ".escapeshellarg($br));
+
+    // write radvd snippet
+    $confDir = '/etc/radvd.d';
+    @mkdir($confDir, 0755, true);
+    $conf = "interface {$br} {\n  AdvSendAdvert on;\n  prefix {$prefix} {\n    AdvOnLink on;\n    AdvAutonomous on;\n  };\n";
+    if ($dns !== '') {
+        $conf .= "  RDNSS {$dns} {};\n";
+    }
+    $conf .= "}\n";
+    file_put_contents("{$confDir}/vmforge-{$br}.conf", $conf);
+
+    // ensure main radvd.conf includes snippets
+    $main = '/etc/radvd.conf';
+    if (!file_exists($main) || strpos(@file_get_contents($main), 'include /etc/radvd.d/*.conf;') === false) {
+        file_put_contents($main, "include /etc/radvd.d/*.conf;\n", FILE_APPEND);
+    }
+
+    // restart radvd if available, else instruct to install
+    [$c,$o,$e] = \VMForge\Core\Shell::run("systemctl restart radvd");
+    if ($c !== 0) {
+        return [false, "radvd not installed or failed to restart; install it and enable service. Config written to {$confDir}"];
+    }
+    return [true, "IPv6 RA configured on {$br} for {$prefix}"];
+}
