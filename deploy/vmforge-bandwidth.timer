@@ -1,0 +1,10 @@
+[Unit]
+Description=Run VMForge Bandwidth Collector every 5 minutes
+
+[Timer]
+OnUnitActiveSec=5min
+AccuracySec=1min
+Unit=vmforge-bandwidth.service
+
+[Install]
+WantedBy=timers.target

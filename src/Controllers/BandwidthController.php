@@ -2,87 +2,107 @@
 namespace VMForge\Controllers;
 
 use VMForge\Core\Auth;
+use VMForge\Core\Security;
 use VMForge\Core\View;
 use VMForge\Core\DB;
-use PDO;
 
 class BandwidthController {
     public function index() {
         Auth::require();
         $pdo = DB::pdo();
+        $vms = $pdo->query('SELECT uuid, name FROM vm_instances ORDER BY name')->fetchAll(\PDO::FETCH_ASSOC);
+        $vm = $_GET['vm'] ?? ($vms[0]['uuid'] ?? null);
+        $cap = null;
+        if ($vm) {
+            $st = $pdo->prepare('SELECT mbps FROM egress_caps WHERE vm_uuid=?');
+            $st->execute([$vm]);
+            $cap = $st->fetchColumn();
+        }
+        $stats = [];
+        if ($vm) {
+            $st = $pdo->prepare('SELECT SUM(rx_bytes) AS rx, SUM(tx_bytes) AS tx FROM bandwidth_usage WHERE vm_uuid=? AND period_start > (NOW() - INTERVAL 1 DAY)');
+            $st->execute([$vm]);
+            $agg = $st->fetch(\PDO::FETCH_ASSOC) ?: ['rx'=>0,'tx'=>0];
+            $stats = ['day_rx'=>(int)$agg['rx'], 'day_tx'=>(int)$agg['tx']];
+        }
+        $csrf = Security::csrfToken();
 
-        $hours = isset($_GET['hours']) ? max(1, (int)$_GET['hours']) : 24;
-        $to = time();
-        $from = $to - ($hours * 3600);
-
-        $st = $pdo->prepare("SELECT vm_uuid, interface,
-                SUM(rx_bytes) AS rx_bytes, SUM(tx_bytes) AS tx_bytes,
-                SUM(rx_packets) AS rx_packets, SUM(tx_packets) AS tx_packets
-            FROM bandwidth_usage
-            WHERE period_start >= FROM_UNIXTIME(?) AND period_end <= FROM_UNIXTIME(?)
-            GROUP BY vm_uuid, interface
-            ORDER BY (SUM(rx_bytes)+SUM(tx_bytes)) DESC");
-        $st->execute([$from, $to]);
-        $rows = $st->fetchAll(PDO::FETCH_ASSOC);
-
-        // map VM names
-        $names = [];
-        $vmRows = $pdo->query("SELECT uuid, name FROM vm_instances")->fetchAll(PDO::FETCH_ASSOC);
-        foreach ($vmRows as $v) { $names[$v['uuid']] = $v['name']; }
-
-        ob_start();
-        ?>
+        ob_start(); ?>
 <div class="card">
-  <h2>Bandwidth (last <?php echo (int)$hours; ?>h)</h2>
-  <form method="get" action="/admin/bandwidth">
-    <label>Hours:</label> <input type="number" name="hours" value="<?php echo (int)$hours; ?>" min="1" max="720">
-    <button type="submit">Apply</button>
-    <a href="/admin/bandwidth.csv?hours=<?php echo (int)$hours; ?>">Download CSV</a>
+  <h2>Bandwidth</h2>
+  <form method="get" action="/admin/bandwidth" style="margin-bottom:1rem">
+    <select name="vm" onchange="this.form.submit()">
+      <?php foreach ($vms as $vv): ?>
+        <option value="<?= htmlspecialchars($vv['uuid']) ?>" <?= $vm===$vv['uuid']?'selected':'' ?>><?= htmlspecialchars($vv['name']) ?></option>
+      <?php endforeach; ?>
+    </select>
   </form>
-  <table class="table">
-    <thead>
-      <tr><th>VM</th><th>Interface</th><th>RX MiB</th><th>TX MiB</th><th>RX pkts</th><th>TX pkts</th></tr>
-    </thead>
-    <tbody>
-      <?php foreach ($rows as $r) { ?>
-        <tr>
-          <td><?php echo htmlspecialchars($names[$r['vm_uuid']] ?? $r['vm_uuid']); ?></td>
-          <td><?php echo htmlspecialchars($r['interface']); ?></td>
-          <td><?php echo number_format($r['rx_bytes'] / (1024*1024), 2); ?></td>
-          <td><?php echo number_format($r['tx_bytes'] / (1024*1024), 2); ?></td>
-          <td><?php echo (int)$r['rx_packets']; ?></td>
-          <td><?php echo (int)$r['tx_packets']; ?></td>
-        </tr>
-      <?php } ?>
-    </tbody>
-  </table>
+
+  <?php if ($vm): ?>
+  <div style="display:flex; gap:2rem; align-items:center; margin-bottom:1rem">
+    <div><b>24h RX:</b> <?= number_format(($stats['day_rx']??0)/1024/1024,1) ?> MiB</div>
+    <div><b>24h TX:</b> <?= number_format(($stats['day_tx']??0)/1024/1024,1) ?> MiB</div>
+    <div><b>Egress cap:</b> <?= $cap ? (int)$cap . ' Mbps' : 'none' ?></div>
+  </div>
+
+  <form method="post" action="/admin/bandwidth/setcap" style="display:flex; gap:0.5rem; align-items:center">
+    <input type="hidden" name="csrf" value="<?= htmlspecialchars($csrf) ?>">
+    <input type="hidden" name="vm" value="<?= htmlspecialchars($vm) ?>">
+    <input type="number" min="1" step="1" name="mbps" placeholder="Mbps" required>
+    <button type="submit">Set Egress Cap</button>
+  </form>
+
+  <form method="post" action="/admin/bandwidth/clearcap" style="margin-top:0.5rem" onsubmit="return confirm('Clear cap?')">
+    <input type="hidden" name="csrf" value="<?= htmlspecialchars($csrf) ?>">
+    <input type="hidden" name="vm" value="<?= htmlspecialchars($vm) ?>">
+    <button type="submit">Clear Cap</button>
+  </form>
+  <?php endif; ?>
 </div>
 <?php
         $html = ob_get_clean();
         View::render('Bandwidth', $html);
     }
 
-    public function csv() {
+    public function setcap() {
         Auth::require();
+        Security::requireCsrf($_POST['csrf'] ?? null);
+        $vm = $_POST['vm'] ?? null;
+        $mbps = (int)($_POST['mbps'] ?? 0);
+        if (!$vm || $mbps < 1) { http_response_code(400); echo 'bad input'; return; }
+
+        // Persist desired cap
         $pdo = DB::pdo();
-        $hours = isset($_GET['hours']) ? max(1, (int)$_GET['hours']) : 24;
-        $to = time();
-        $from = $to - ($hours * 3600);
-        header('Content-Type: text/csv');
-        header('Content-Disposition: attachment; filename="bandwidth.csv"');
-        $out = fopen('php://output', 'w');
-        fputcsv($out, ['vm_uuid','interface','rx_bytes','tx_bytes','rx_packets','tx_packets','from','to']);
-        $st = $pdo->prepare("SELECT vm_uuid, interface,
-                SUM(rx_bytes) AS rx_bytes, SUM(tx_bytes) AS tx_bytes,
-                SUM(rx_packets) AS rx_packets, SUM(tx_packets) AS tx_packets
-            FROM bandwidth_usage
-            WHERE period_start >= FROM_UNIXTIME(?) AND period_end <= FROM_UNIXTIME(?)
-            GROUP BY vm_uuid, interface
-            ORDER BY vm_uuid, interface");
-        $st->execute([$from, $to]);
-        while ($r = $st->fetch(PDO::FETCH_ASSOC)) {
-            fputcsv($out, [$r['vm_uuid'], $r['interface'], $r['rx_bytes'], $r['tx_bytes'], $r['rx_packets'], $r['tx_packets'], date('c',$from), date('c',$to)]);
+        $pdo->prepare('REPLACE INTO egress_caps (vm_uuid, mbps, updated_at) VALUES (?, ?, NOW())')->execute([$vm, $mbps]);
+
+        // Find VM location
+        $st = $pdo->prepare('SELECT node_id, name FROM vm_instances WHERE uuid=?');
+        $st->execute([$vm]); $row = $st->fetch(\PDO::FETCH_ASSOC);
+        if (!$row) { http_response_code(404); echo 'vm not found'; return; }
+
+        // Queue job on agent
+        $payload = json_encode(['name'=>$row['name'], 'mbps'=>$mbps], JSON_UNESCAPED_SLASHES);
+        $ins = $pdo->prepare("INSERT INTO jobs (node_id, type, payload, status, created_at) VALUES (?, 'NET_EGRESS_CAP_SET', ?, 'pending', NOW())");
+        $ins->execute([(int)$row['node_id'], $payload]);
+
+        header('Location: /admin/bandwidth?vm=' . urlencode($vm));
+    }
+
+    public function clearcap() {
+        Auth::require();
+        Security::requireCsrf($_POST['csrf'] ?? null);
+        $vm = $_POST['vm'] ?? null;
+        if (!$vm) { http_response_code(400); echo 'bad input'; return; }
+
+        $pdo = DB::pdo();
+        $pdo->prepare('DELETE FROM egress_caps WHERE vm_uuid=?')->execute([$vm]);
+        $st = $pdo->prepare('SELECT node_id, name FROM vm_instances WHERE uuid=?');
+        $st->execute([$vm]); $row = $st->fetch(\PDO::FETCH_ASSOC);
+        if ($row) {
+            $payload = json_encode(['name'=>$row['name']], JSON_UNESCAPED_SLASHES);
+            $ins = $pdo->prepare("INSERT INTO jobs (node_id, type, payload, status, created_at) VALUES (?, 'NET_EGRESS_CAP_CLEAR', ?, 'pending', NOW())");
+            $ins->execute([(int)$row['node_id'], $payload]);
         }
-        fclose($out);
+        header('Location: /admin/bandwidth?vm=' . urlencode($vm));
     }
 }

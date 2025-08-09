@@ -1,0 +1,14 @@
+[Unit]
+Description=VMForge Bandwidth Collector
+After=network.target mysql.service mariadb.service
+
+[Service]
+Type=simple
+User=vmforge
+WorkingDirectory=/var/www/vmforge
+ExecStart=/usr/bin/php /var/www/vmforge/scripts/metrics/collect_bandwidth.php
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
