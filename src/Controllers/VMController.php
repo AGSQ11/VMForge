@@ -6,6 +6,7 @@ use VMForge\Core\UUID;
 use VMForge\Models\VM;
 use VMForge\Models\Node;
 use VMForge\Models\Job;
+use VMForge\Services\IPAM;
 
 class VMController {
     public function index() {
@@ -25,13 +26,14 @@ class VMController {
         </div>
         <div class="card"><h3>Create Instance</h3>
         <form method="post" action="/admin/vms">
+            <input type="hidden" name="csrf" value="<?php echo htmlspecialchars(\VMForge\Core\Security::csrfToken()); ?>">
             <label>Node</label><select name="node_id" required>'+ $nodeOptions +'</select>
             <label>Type</label><select name="type"><option value="kvm">KVM</option><option value="lxc">LXC</option></select>
             <input name="name" placeholder="vm-name" required>
             <input name="vcpus" type="number" placeholder="2" value="2" required>
             <input name="memory_mb" type="number" placeholder="2048" value="2048" required>
             <input name="disk_gb" type="number" placeholder="20" value="20" required>
-            <input name="ip_address" placeholder="192.0.2.10" required>
+            <input name="ip_address" placeholder="192.0.2.10">
             <input name="bridge" placeholder="br0" value="br0" required>
             <input name="image_id" type="number" placeholder="1" value="1" required>
             <button type="submit">Create</button>
@@ -41,6 +43,7 @@ class VMController {
     public function store() {
         Auth::require();
         $uuid = UUID::v4();
+        \VMForge\Core\Security::requireCsrf($_POST['csrf'] ?? null);
         $d = [
             'uuid'=>$uuid,
             'node_id'=>(int)($_POST['node_id'] ?? 1),
@@ -53,6 +56,15 @@ class VMController {
             'bridge'=>$_POST['bridge'] ?? 'br0',
             'ip_address'=>$_POST['ip_address'] ?? ''
         ];
+        // Auto-allocate IPv4 if empty (first pool)
+        if (empty($d['ip_address'])) {
+            $pdo = \VMForge\Core\DB::pdo();
+            $poolId = (int)($pdo->query("SELECT id FROM ip_pools ORDER BY id ASC LIMIT 1")->fetchColumn() ?: 0);
+            if ($poolId) {
+                $ip = IPAM::nextFree($poolId);
+                if ($ip) { $d['ip_address'] = $ip; }
+            }
+        }
         VM::create($d);
         // enqueue job
         $type = $d['type'] === 'lxc' ? 'LXC_CREATE' : 'KVM_CREATE';
