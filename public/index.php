@@ -33,6 +33,7 @@ use VMForge\Controllers\SubnetsController;
 use VMForge\Controllers\Subnets6Controller;
 use VMForge\Controllers\BandwidthController;
 use VMForge\Controllers\ZFSReposController;
+use VMForge\Controllers\FirewallController;
 
 $router = new Router();
 
@@ -109,6 +110,9 @@ $router->get('/admin/bandwidth.csv', [BandwidthController::class, 'csv']);
 
 $router->get('/admin/zfs-repos', [ZFSReposController::class, 'index']);
 $router->post('/admin/zfs-repos', [ZFSReposController::class, 'store']);
+
+$router->get('/admin/firewall', [FirewallController::class, 'index']);
+$router->post('/admin/firewall', [FirewallController::class, 'store']);
 
 // Health
 $router->get('/healthz', [HealthController::class, 'index']);
