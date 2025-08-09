@@ -17,6 +17,7 @@ jobs:
         run: php -r "echo 'composer.json OK' . PHP_EOL;"
       - name: Syntax check
         run: |
-          find src -type f -name '*.php' -print0 | xargs -0 -n1 -I{} php -l {}
-          find agent -type f -name '*.php' -print0 | xargs -0 -n1 -I{} php -l {}
-          find public -type f -name '*.php' -print0 | xargs -0 -n1 -I{} php -l {}
+          set -e
+          find src -type f -name '*.php' -print0   | xargs -0 -r -n1 php -l
+          find agent -type f -name '*.php' -print0 | xargs -0 -r -n1 php -l
+          find public -type f -name '*.php' -print0| xargs -0 -r -n1 php -l
