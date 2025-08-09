@@ -11,6 +11,7 @@ class TokensController {
     public function index() {
         Auth::require();
         $pdo = DB::pdo();
+        $csrf = Security::csrfToken();
         $toks = $pdo->query('SELECT id, user_id, SUBSTRING(token_hash,1,16) AS token_prefix, created_at, last_used_at, project_id, scope FROM api_tokens ORDER BY id DESC')->fetchAll(PDO::FETCH_ASSOC);
         $rows='';
         foreach ($toks as $t) {
@@ -19,7 +20,7 @@ class TokensController {
         $html = '<div class="card"><h2>API Tokens</h2><table class="table"><thead><tr><th>ID</th><th>User</th><th>Token (prefix)</th><th>Project</th><th>Scope</th><th>Created</th><th>Last Used</th></tr></thead><tbody>'.$rows.'</tbody></table>
         <h3>Create</h3>
         <form method="post" action="/admin/api-tokens">
-            <input type="hidden" name="csrf" value="<?php echo htmlspecialchars(\VMForge\Core\Security::csrfToken()); ?>">
+            <input type="hidden" name="csrf" value="'.$csrf.'">
             <select name="scope"><option value="project">project</option><option value="admin">admin</option></select>
             <button type="submit">Create Token</button>
         </form>

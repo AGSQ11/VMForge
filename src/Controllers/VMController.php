@@ -5,6 +5,7 @@ use VMForge\Core\View;
 use VMForge\Core\UUID;
 use VMForge\Core\DB;
 use VMForge\Core\Policy;
+use VMForge\Core\Security;
 use VMForge\Models\VM;
 use VMForge\Models\Node;
 use VMForge\Models\Job;
@@ -39,12 +40,13 @@ class VMController {
             $console = $v['type']==='kvm' ? '<a href="/console/open?uuid='.htmlspecialchars($v['uuid']).'">Open Console</a>' : '-';
             $rows .= '<tr><td>'.htmlspecialchars($v['uuid']).'</td><td><a href="/admin/vm?uuid='.htmlspecialchars($v['uuid']).'">'.htmlspecialchars($v['name']).'</a></td><td>'.htmlspecialchars($v['type']).'</td><td>'.htmlspecialchars((string)$v['vcpus']).'</td><td>'.htmlspecialchars((string)$v['memory_mb']).'</td><td>'.htmlspecialchars($v['ip_address']).'</td><td>'.htmlspecialchars((string)$v['project_id']).'</td><td>'.$console.'</td></tr>';
         }
+        $csrf = Security::csrfToken();
         $html = '<div class="card"><h2>VMs</h2>
         <table class="table"><thead><tr><th>UUID</th><th>Name</th><th>Type</th><th>vCPU</th><th>RAM(MB)</th><th>IP</th><th>Project</th><th>Console</th></tr></thead><tbody>'.$rows.'</tbody></table>
         </div>
         <div class="card"><h3>Create Instance</h3>
         <form method="post" action="/admin/vms">
-            <input type="hidden" name="csrf" value="<?php echo htmlspecialchars(\VMForge\Core\Security::csrfToken()); ?>">
+            <input type="hidden" name="csrf" value="'.$csrf.'">
             <label>Node</label><select name="node_id" required>'+ $nodeOptions +'</select>
             <label>Type</label><select name="type"><option value="kvm">KVM</option><option value="lxc">LXC</option></select>
             <input name="name" placeholder="vm-name" required>
@@ -67,10 +69,11 @@ class VMController {
     }
     public function store() {
         Auth::require();
+        Security::requireCsrf($_POST['csrf'] ?? null);
         $uuid = UUID::v4();
-        \VMForge\Core\Security::requireCsrf($_POST['csrf'] ?? null);
-        $pid = \VMForge\Core\Policy::requireProjectSelected();
-        // enforce quotas
+        $pid = Policy::requireProjectSelected();
+        $user = Auth::user();
+        Policy::requireMember($user, $pid);
         $pdo = DB::pdo();
         $q = $pdo->prepare('SELECT max_vms, max_vcpus, max_ram_mb, max_disk_gb FROM quotas WHERE project_id=?');
         $q->execute([$pid]);
@@ -102,18 +105,17 @@ class VMController {
         if (empty($d['ip_address'])) {
             $poolId = (int)($pdo->query("SELECT id FROM ip_pools ORDER BY id ASC LIMIT 1")->fetchColumn() ?: 0);
             if ($poolId) {
-                $ip = IPAM::nextFree($poolId);
+                $ip = \VMForge\Services\IPAM::nextFree($poolId);
                 if ($ip) { $d['ip_address'] = $ip; }
             }
         }
         $d['mac_address'] = $this->macFromUuid($uuid);
-        // persist
-        VM::create($d);
+        \VMForge\Models\VM::create($d);
         $type = $d['type'] === 'lxc' ? 'LXC_CREATE' : 'KVM_CREATE';
         $payload = $d; $payload['mac_address'] = $d['mac_address'];
-        Job::enqueue($d['node_id'], $type, $payload);
+        \VMForge\Models\Job::enqueue($d['node_id'], $type, $payload);
         if ($d['type'] === 'kvm') {
-            Job::enqueue($d['node_id'], 'NET_ANTISPOOF', [
+            \VMForge\Models\Job::enqueue($d['node_id'], 'NET_ANTISPOOF', [
                 'name'=>$d['name'],
                 'ip4'=>$d['ip_address'] ?? null,
                 'mac'=>$d['mac_address']

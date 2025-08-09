@@ -1,6 +1,5 @@
 <?php
 declare(strict_types=1);
-
 require __DIR__ . '/../src/bootstrap.php';
 
 use VMForge\Core\Router;
@@ -22,6 +21,7 @@ use VMForge\Controllers\NetworkController;
 use VMForge\Controllers\SnapshotController;
 use VMForge\Controllers\ProjectsController;
 use VMForge\Controllers\RestoreController;
+use VMForge\Controllers\HealthController;
 
 $router = new Router();
 
@@ -61,11 +61,15 @@ $router->get('/admin/backups', [BackupController::class, 'index']);
 $router->post('/admin/backups', [BackupController::class, 'create']);
 $router->post('/admin/snapshots', [SnapshotController::class, 'create']);
 $router->post('/admin/restore', [RestoreController::class, 'create']);
+$router->post('/admin/restore-new', [RestoreController::class, 'createNew']);
 
 $router->get('/admin/projects', [ProjectsController::class, 'index']);
 $router->post('/admin/projects', [ProjectsController::class, 'store']);
 $router->post('/admin/projects/switch', [ProjectsController::class, 'switch']);
 $router->post('/admin/projects/quotas', [ProjectsController::class, 'quotas']);
+
+// Health
+$router->get('/healthz', [HealthController::class, 'index']);
 
 // Agent
 $router->post('/agent/poll', [AgentController::class, 'poll']);
