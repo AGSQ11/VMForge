@@ -30,7 +30,7 @@ use VMForge\Controllers\MetricsController;
 use VMForge\Controllers\ISOController;
 use VMForge\Controllers\ReinstallController;
 use VMForge\Controllers\SubnetsController;
-use VMForge\Controllers\BandwidthController;
+use VMForge\Controllers\ZFSReposController;
 
 $router = new Router();
 
@@ -99,8 +99,8 @@ $router->post('/admin/reinstall', [ReinstallController::class, 'create']);
 $router->get('/admin/subnets', [SubnetsController::class, 'index']);
 $router->post('/admin/subnets', [SubnetsController::class, 'store']);
 
-$router->get('/admin/bandwidth', [BandwidthController::class, 'index']);
-$router->get('/admin/bandwidth.csv', [BandwidthController::class, 'csv']);
+$router->get('/admin/zfs-repos', [ZFSReposController::class, 'index']);
+$router->post('/admin/zfs-repos', [ZFSReposController::class, 'store']);
 
 // Health
 $router->get('/healthz', [HealthController::class, 'index']);

@@ -1,0 +1,153 @@
+<?php
+// Add to agent/agent.php (dispatcher + functions). Full file not replaced here to avoid clobbering your local edits.
+// 1) Add cases to executeJob():
+// case 'ZFS_BACKUP':            return zfs_backup($p, $bridge);
+// case 'ZFS_PRUNE':             return zfs_prune($p, $bridge);
+// case 'ZFS_RESTORE':           return zfs_restore($p, $bridge);
+// case 'ZFS_RESTORE_AS_NEW':    return zfs_restore_as_new($p, $bridge);
+//
+// 2) Add functions:
+
+function zfs_backup(array $p, string $bridge): array {
+    $name = $p['name'] ?? null;
+    $uuid = $p['uuid'] ?? null;
+    $repo = (int)($p['repo_id'] ?? 0);
+    $keep = (int)($p['keep_last'] ?? 7);
+    if (!$name || !$uuid || $repo < 1) return [false,'missing fields'];
+
+    // lookup repo
+    $pdo = \VMForge\Core\DB::pdo();
+    $st = $pdo->prepare("SELECT * FROM zfs_repos WHERE id=?");
+    $st->execute([$repo]);
+    $r = $st->fetch(\PDO::FETCH_ASSOC);
+    if (!$r) return [false,'repo not found'];
+
+    // compute VM dataset and snapshot name
+    $vmDs = \VMForge\Services\ZFS::vmDataset($name);
+    $snap = \VMForge\Services\ZFS::snapName($name);
+
+    // ensure dataset exists
+    \VMForge\Core\Shell::run("zfs list -H ".escapeshellarg($vmDs)." || zfs create -o compression=".$r['compression']." ".escapeshellarg($vmDs));
+
+    // quiesce: stop or fsfreeze could be added later. For now, best effort snapshot.
+    [$cs,$os,$es] = \VMForge\Core\Shell::run("zfs snapshot ".escapeshellarg($vmDs.'@'.$snap));
+    if ($cs !== 0) return [false, $es ?: $os];
+
+    // send/recv
+    $dest = $r['dataset'] . '/' . $name;
+    if ($r['mode'] === 'ssh' && !empty($r['remote_host'])) {
+        $user = $r['remote_user'] ?: 'root';
+        $port = (int)($r['ssh_port'] ?: 22);
+        $cmd = "zfs send ".escapeshellarg($vmDs.'@'.$snap)." | ssh -p {$port} ".escapeshellarg("{$user}@{$r['remote_host']}")." zfs recv -F ".escapeshellarg($dest);
+    } else {
+        $cmd = "zfs send ".escapeshellarg($vmDs.'@'.$snap)." | zfs recv -F ".escapeshellarg($dest);
+    }
+    [$c2,$o2,$e2] = \VMForge\Core\Shell::run($cmd);
+    if ($c2 !== 0) return [false, $e2 ?: $o2];
+
+    // retention (prune old snapshots on destination)
+    return zfs_prune(['name'=>$name,'repo_id'=>$repo,'keep_last'=>$keep], $bridge);
+}
+
+function zfs_list_dest_snaps(array $repo, string $name): array {
+    $dest = $repo['dataset'].'/'.$name;
+    if ($repo['mode'] === 'ssh' && !empty($repo['remote_host'])) {
+        $user = $repo['remote_user'] ?: 'root';
+        $port = (int)($repo['ssh_port'] ?: 22);
+        [$c,$o,$e] = \VMForge\Core\Shell::run("ssh -p {$port} ".escapeshellarg("{$user}@{$repo['remote_host']}")." zfs list -H -t snapshot -o name -s creation | grep ".escapeshellarg('^'.$dest.'@'));
+    } else {
+        [$c,$o,$e] = \VMForge\Core\Shell::run("zfs list -H -t snapshot -o name -s creation | grep ".escapeshellarg('^'.$dest.'@'));
+    }
+    if (($o ?? '') === '') return [];
+    $lines = array_filter(array_map('trim', explode("\n", $o)));
+    return array_values($lines);
+}
+
+function zfs_prune(array $p, string $bridge): array {
+    $name = $p['name'] ?? null;
+    $repo = (int)($p['repo_id'] ?? 0);
+    $keep = (int)($p['keep_last'] ?? 7);
+    if (!$name || $repo < 1) return [false,'missing'];
+    $pdo = \VMForge\Core\DB::pdo();
+    $st = $pdo->prepare("SELECT * FROM zfs_repos WHERE id=?");
+    $st->execute([$repo]);
+    $r = $st->fetch(\PDO::FETCH_ASSOC);
+    if (!$r) return [false,'repo not found'];
+
+    $snaps = zfs_list_dest_snaps($r, $name);
+    $toDelete = max(0, count($snaps) - $keep);
+    $deleted = 0;
+    for ($i=0; $i<$toDelete; $i++) {
+        $snap = $snaps[$i];
+        if ($r['mode'] === 'ssh' && !empty($r['remote_host'])) {
+            $user = $r['remote_user'] ?: 'root';
+            $port = (int)($r['ssh_port'] ?: 22);
+            \VMForge\Core\Shell::run("ssh -p {$port} ".escapeshellarg("{$user}@{$r['remote_host']}")." zfs destroy ".escapeshellarg($snap));
+        } else {
+            \VMForge\Core\Shell::run("zfs destroy ".escapeshellarg($snap));
+        }
+        $deleted++;
+    }
+    return [true, "pruned {$deleted}/".count($snaps)." snapshots"];
+}
+
+function zfs_restore(array $p, string $bridge): array {
+    $name = $p['name'] ?? null;
+    $repo = (int)($p['repo_id'] ?? 0);
+    $snapshot = $p['snapshot'] ?? null; // full dest snap name or suffix
+    if (!$name || $repo < 1 || !$snapshot) return [false,'missing'];
+    $pdo = \VMForge\Core\DB::pdo();
+    $st = $pdo->prepare("SELECT * FROM zfs_repos WHERE id=?");
+    $st->execute([$repo]);
+    $r = $st->fetch(\PDO::FETCH_ASSOC);
+    if (!$r) return [false,'repo not found'];
+
+    $dest = $r['dataset'].'/'.$name;
+    // If snapshot is a suffix, expand
+    if (strpos($snapshot, '@') === false) $snapshot = $dest.'@'.$snapshot;
+
+    $vmDs = \VMForge\Services\ZFS::vmDataset($name);
+    // Stop VM before rollback/recv
+    \VMForge\Core\Shell::run("virsh destroy ".escapeshellarg($name)." || true");
+    // Receive into VM dataset (force)
+    if ($r['mode'] === 'ssh' && !empty($r['remote_host'])) {
+        $user = $r['remote_user'] ?: 'root';
+        $port = (int)($r['ssh_port'] ?: 22);
+        $cmd = "ssh -p {$port} ".escapeshellarg("{$user}@{$r['remote_host']}")." zfs send ".escapeshellarg($snapshot)." | zfs recv -F ".escapeshellarg($vmDs);
+    } else {
+        $cmd = "zfs send ".escapeshellarg($snapshot)." | zfs recv -F ".escapeshellarg($vmDs);
+    }
+    [$c,$o,$e] = \VMForge\Core\Shell::run($cmd);
+    if ($c !== 0) return [false, $e ?: $o];
+    // Start VM
+    \VMForge\Core\Shell::run("virsh start ".escapeshellarg($name));
+    return [true, 'restore complete'];
+}
+
+function zfs_restore_as_new(array $p, string $bridge): array {
+    $new = $p['new_name'] ?? null;
+    $repo = (int)($p['repo_id'] ?? 0);
+    $source_vm = $p['source_vm'] ?? null;
+    $snapshot = $p['snapshot'] ?? null;
+    if (!$new || !$repo || !$source_vm || !$snapshot) return [false,'missing'];
+    $pdo = \VMForge\Core\DB::pdo();
+    $st = $pdo->prepare("SELECT * FROM zfs_repos WHERE id=?");
+    $st->execute([$repo]);
+    $r = $st->fetch(\PDO::FETCH_ASSOC);
+    if (!$r) return [false,'repo not found'];
+
+    $dest = $r['dataset'].'/'.$source_vm;
+    if (strpos($snapshot, '@') === false) $snapshot = $dest.'@'.$snapshot;
+
+    $newDs = \VMForge\Services\ZFS::vmDataset($new);
+    if ($r['mode'] === 'ssh' && !empty($r['remote_host'])) {
+        $user = $r['remote_user'] ?: 'root';
+        $port = (int)($r['ssh_port'] ?: 22);
+        $cmd = "ssh -p {$port} ".escapeshellarg("{$user}@{$r['remote_host']}")." zfs send ".escapeshellarg($snapshot)." | zfs recv -F ".escapeshellarg($newDs);
+    } else {
+        $cmd = "zfs send ".escapeshellarg($snapshot)." | zfs recv -F ".escapeshellarg($newDs);
+    }
+    [$c,$o,$e] = \VMForge\Core\Shell::run($cmd);
+    if ($c !== 0) return [false, $e ?: $o];
+    return [true, 'restored as new dataset '. $newDs];
+}
