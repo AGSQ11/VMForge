@@ -1,9 +1,12 @@
 <?php
 declare(strict_types=1);
+
 require __DIR__ . '/../src/bootstrap.php';
+
 use VMForge\Core\Router;
 use VMForge\Controllers\HomeController;
 use VMForge\Controllers\AuthController;
+use VMForge\Controllers\SettingsController;
 use VMForge\Controllers\NodeController;
 use VMForge\Controllers\VMController;
 use VMForge\Controllers\VMDetailsController;
@@ -17,6 +20,8 @@ use VMForge\Controllers\ConsoleController;
 use VMForge\Controllers\BackupController;
 use VMForge\Controllers\NetworkController;
 use VMForge\Controllers\SnapshotController;
+use VMForge\Controllers\ProjectsController;
+use VMForge\Controllers\RestoreController;
 
 $router = new Router();
 
@@ -24,6 +29,9 @@ $router->get('/', [HomeController::class, 'index']);
 $router->get('/login', [AuthController::class, 'showLogin']);
 $router->post('/login', [AuthController::class, 'login']);
 $router->get('/logout', [AuthController::class, 'logout']);
+
+$router->get('/settings/2fa', [SettingsController::class, 'twofa']);
+$router->post('/settings/2fa', [SettingsController::class, 'twofaPost']);
 
 $router->get('/admin/nodes', [NodeController::class, 'index']);
 $router->post('/admin/nodes', [NodeController::class, 'store']);
@@ -52,6 +60,12 @@ $router->get('/console/close', [ConsoleController::class, 'close']);
 $router->get('/admin/backups', [BackupController::class, 'index']);
 $router->post('/admin/backups', [BackupController::class, 'create']);
 $router->post('/admin/snapshots', [SnapshotController::class, 'create']);
+$router->post('/admin/restore', [RestoreController::class, 'create']);
+
+$router->get('/admin/projects', [ProjectsController::class, 'index']);
+$router->post('/admin/projects', [ProjectsController::class, 'store']);
+$router->post('/admin/projects/switch', [ProjectsController::class, 'switch']);
+$router->post('/admin/projects/quotas', [ProjectsController::class, 'quotas']);
 
 // Agent
 $router->post('/agent/poll', [AgentController::class, 'poll']);

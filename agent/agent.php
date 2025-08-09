@@ -46,6 +46,7 @@ function executeJob(string $type, array $p, string $bridge): array {
         case 'NET_SETUP': return net_setup($p, $bridge);
         case 'SNAPSHOT_CREATE': return snapshot_create($p, $bridge);
         case 'BACKUP_UPLOAD': return backup_upload($p, $bridge);
+        case 'BACKUP_RESTORE': return backup_restore($p, $bridge);
         case 'KVM_START': return kvm_start($p, $bridge);
         case 'KVM_STOP': return kvm_stop($p, $bridge);
         case 'KVM_REBOOT': return kvm_reboot($p, $bridge);
@@ -53,9 +54,15 @@ function executeJob(string $type, array $p, string $bridge): array {
         case 'LXC_START': return lxc_start($p, $bridge);
         case 'LXC_STOP': return lxc_stop($p, $bridge);
         case 'LXC_DELETE': return lxc_delete($p, $bridge);
-        case 'BACKUP_RESTORE': return backup_restore($p, $bridge);
+        case 'NET_ANTISPOOF': return net_antispoof($p, $bridge);
         default: return [false, "Unknown job type {$type}"];
     }
+}
+function mac_from_uuid($uuid) {
+    $hex = preg_replace('/[^a-f0-9]/i','', $uuid);
+    $h = substr(hash('md5', $hex), 0, 10);
+    $pairs = str_split($h, 2);
+    return implode(':', array_merge(['02'], $pairs));
 }
 function kvm_create(array $p, string $bridge): array {
     $uuid  = $p['uuid'] ?? uniqid('vm-', true);
@@ -65,14 +72,18 @@ function kvm_create(array $p, string $bridge): array {
     $disk  = (int)($p['disk_gb'] ?? 20);
     $imgId = (int)($p['image_id'] ?? 1);
     $br    = $p['bridge'] ?? $bridge;
+    $mac   = $p['mac_address'] ?? mac_from_uuid($uuid);
+
     $im = new ImageManager();
     [$ok, $base] = $im->downloadIfMissing($imgId);
     if (!$ok) return [false, "image: ".$base];
+
     $overlay = "/var/lib/libvirt/images/{$name}.qcow2";
     [$c0,$o0,$e0] = Shell::run("qemu-img create -f qcow2 -b ".escapeshellarg($base)." -F qcow2 ".escapeshellarg($overlay));
     if ($c0 !== 0) return [false, $e0 ?: $o0];
     [$cg,$og,$eg] = Shell::run("qemu-img resize ".escapeshellarg($overlay)." ".escapeshellarg("{$disk}G"));
     if ($cg !== 0) return [false, $eg ?: $og];
+
     $seedDir = "/var/lib/libvirt/seed/{$name}";
     $net = null;
     if (!empty($p['ip_address']) || !empty($p['ipv6_address'])) {
@@ -84,6 +95,7 @@ function kvm_create(array $p, string $bridge): array {
     }
     [$cs,$co,$ce] = CloudInit::buildSeedISO($seedDir, $name, $name, $p['ci_user'] ?? 'admin', $p['ssh_key'] ?? null, $p['ci_password'] ?? null, $net);
     if ($cs !== 0) return [false, $ce ?: $co];
+
     $xml = <<<XML
 <domain type='kvm'>
   <name>{$name}</name>
@@ -101,7 +113,7 @@ function kvm_create(array $p, string $bridge): array {
       <source file='{$seedDir}/seed.iso'/>
       <target dev='sda' bus='sata'/><readonly/>
     </disk>
-    <interface type='bridge'><source bridge='{$br}'/><model type='virtio'/></interface>
+    <interface type='bridge'><source bridge='{$br}'/><mac address='{$mac}'/><model type='virtio'/></interface>
     <graphics type='vnc' port='-1' autoport='yes'/>
   </devices>
 </domain>
@@ -126,13 +138,6 @@ function lxc_create(array $p, string $bridge): array {
     if ($c2 !== 0) return [false, $e2 ?: $o2];
     return [true, "created+started {$name}"];
 }
-function kvm_start($p,$b){$n=$p['name']??null;if(!$n)return[false,'missing vm name'];return Shell::run("virsh start ".escapeshellarg($n));}
-function kvm_stop($p,$b){$n=$p['name']??null;if(!$n)return[false,'missing vm name'];return Shell::run("virsh shutdown ".escapeshellarg($n)." || virsh destroy ".escapeshellarg($n));}
-function kvm_reboot($p,$b){$n=$p['name']??null;if(!$n)return[false,'missing vm name'];return Shell::run("virsh reboot ".escapeshellarg($n));}
-function kvm_delete($p,$b){$n=$p['name']??null;if(!$n)return[false,'missing vm name'];Shell::run("virsh destroy ".escapeshellarg($n)." || true");Shell::run("virsh undefine ".escapeshellarg($n)." --remove-all-storage || true");return [true,'deleted'];}
-function lxc_start($p,$b){$n=$p['name']??null;if(!$n)return[false,'missing ct name'];return Shell::run("lxc-start -n ".escapeshellarg($n));}
-function lxc_stop($p,$b){$n=$p['name']??null;if(!$n)return[false,'missing ct name'];return Shell::run("lxc-stop -n ".escapeshellarg($n));}
-function lxc_delete($p,$b){$n=$p['name']??null;if(!$n)return[false,'missing ct name'];Shell::run("lxc-stop -n ".escapeshellarg($n)." || true");return Shell::run("lxc-destroy -n ".escapeshellarg($n));}
 function kvm_console_open(array $p, string $bridge): array {
     $name = $p['name'] ?? null; if (!$name) return [false, 'missing vm name'];
     [$cd,$od,$ed] = Shell::run("virsh vncdisplay ".escapeshellarg($name));
@@ -208,4 +213,39 @@ function backup_restore(array $p, string $bridge): array {
         $src = $local;
     }
     return Shell::run("qemu-img convert -O qcow2 ".escapeshellarg($src)." ".escapeshellarg($dest));
+}
+function kvm_start($p,$b){$n=$p['name']??null;if(!$n)return[false,'missing vm name'];return Shell::run("virsh start ".escapeshellarg($n));}
+function kvm_stop($p,$b){$n=$p['name']??null;if(!$n)return[false,'missing vm name'];return Shell::run("virsh shutdown ".escapeshellarg($n)." || virsh destroy ".escapeshellarg($n));}
+function kvm_reboot($p,$b){$n=$p['name']??null;if(!$n)return[false,'missing vm name'];return Shell::run("virsh reboot ".escapeshellarg($n));}
+function kvm_delete($p,$b){$n=$p['name']??null;if(!$n)return[false,'missing vm name'];Shell::run("virsh destroy ".escapeshellarg($n)." || true");Shell::run("virsh undefine ".escapeshellarg($n)." --remove-all-storage || true");return [true,'deleted'];}
+function lxc_start($p,$b){$n=$p['name']??null;if(!$n)return[false,'missing ct name'];return Shell::run("lxc-start -n ".escapeshellarg($n));}
+function lxc_stop($p,$b){$n=$p['name']??null;if(!$n)return[false,'missing ct name'];return Shell::run("lxc-stop -n ".escapeshellarg($n));}
+function lxc_delete($p,$b){$n=$p['name']??null;if(!$n)return[false,'missing ct name'];Shell::run("lxc-stop -n ".escapeshellarg($n)." || true");return Shell::run("lxc-destroy -n ".escapeshellarg($n));}
+
+function net_antispoof(array $p, string $bridge): array {
+    $name = $p['name'] ?? null;
+    $mac = $p['mac'] ?? null;
+    $ip4 = $p['ip4'] ?? null;
+    if (!$name || !$mac) return [false,'missing name/mac'];
+    // Find vnet interface for this domain
+    $tries = 0; $ifname = '';
+    while ($tries < 15) {
+        [$c,$o,$e] = \VMForge\Core\Shell::run("virsh domiflist ".escapeshellarg($name)." | awk '/bridge/ {print $1, $3, $4}'");
+        if ($c===0 && trim($o)!=='') {
+            foreach (explode("\n", trim($o)) as $line) {
+                $parts = preg_split('/\s+/', trim($line));
+                if (count($parts) >= 3) { $ifname = $parts[0]; break; }
+            }
+        }
+        if ($ifname) break;
+        sleep(1); $tries++;
+    }
+    if (!$ifname) return [false,'cannot determine interface'];
+    // Ensure table exists
+    \VMForge\Core\Shell::run("nft list table bridge vmforge_antispoof || nft add table bridge vmforge_antispoof");
+    \VMForge\Core\Shell::run("nft list chain bridge vmforge_antispoof forward || nft add chain bridge vmforge_antispoof forward { type filter hook forward priority 0; policy accept; }");
+    // Drop frames not matching MAC/IP
+    \VMForge\Core\Shell::run("nft add rule bridge vmforge_antispoof forward iifname ".escapeshellarg($ifname)." ether saddr != ".escapeshellarg($mac)." drop || true");
+    if ($ip4) { \VMForge\Core\Shell::run("nft add rule bridge vmforge_antispoof forward iifname ".escapeshellarg($ifname)." ip saddr != ".escapeshellarg($ip4)." drop || true"); }
+    return [true, "antispoof set on {$ifname}"];
 }

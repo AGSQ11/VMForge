@@ -1,44 +1,44 @@
 <?php
 namespace VMForge\Controllers;
 use VMForge\Core\Auth;
-use VMForge\Core\View;
 use VMForge\Core\DB;
+use VMForge\Core\View;
 use VMForge\Core\Security;
+use VMForge\Core\Policy;
 use PDO;
 
 class TokensController {
     public function index() {
         Auth::require();
-        $user = Auth::user();
-        $st = DB::pdo()->prepare('SELECT id, name, scopes, created_at, last_used_at FROM api_tokens WHERE user_id=? ORDER BY id DESC');
-        $st->execute([(int)$user['id']]);
-        $tokens = $st->fetchAll(PDO::FETCH_ASSOC);
+        $pdo = DB::pdo();
+        $toks = $pdo->query('SELECT id, user_id, SUBSTRING(token_hash,1,16) AS token_prefix, created_at, last_used_at, project_id, scope FROM api_tokens ORDER BY id DESC')->fetchAll(PDO::FETCH_ASSOC);
         $rows='';
-        foreach ($tokens as $t) {
-            $rows .= '<tr><td>'.(int)$t['id'].'</td><td>'.htmlspecialchars($t['name']).'</td><td>'.htmlspecialchars($t['scopes']).'</td><td>'.htmlspecialchars($t['created_at']).'</td><td>'.htmlspecialchars($t['last_used_at'] ?? '').'</td></tr>';
+        foreach ($toks as $t) {
+            $rows .= '<tr><td>'.(int)$t['id'].'</td><td>'.(int)$t['user_id'].'</td><td>'.htmlspecialchars($t['token_prefix']).'…</td><td>'.htmlspecialchars((string)$t['project_id']).'</td><td>'.htmlspecialchars($t['scope']).'</td><td>'.htmlspecialchars($t['created_at']).'</td><td>'.htmlspecialchars($t['last_used_at']).'</td></tr>';
         }
-        $newToken = $_GET['tok'] ?? null;
-        $newHtml = $newToken ? '<div class="card"><strong>Copy this token now, it will not be shown again:</strong><br><code>'.htmlspecialchars($newToken).'</code></div>' : '';
-        $html = $newHtml.'<div class="card"><h2>API Tokens</h2>
-        <table class="table"><thead><tr><th>ID</th><th>Name</th><th>Scopes</th><th>Created</th><th>Last Used</th></tr></thead><tbody>'.$rows.'</tbody></table>
-        </div>
-        <div class="card"><h3>Create New Token</h3>
+        $html = '<div class="card"><h2>API Tokens</h2><table class="table"><thead><tr><th>ID</th><th>User</th><th>Token (prefix)</th><th>Project</th><th>Scope</th><th>Created</th><th>Last Used</th></tr></thead><tbody>'.$rows.'</tbody></table>
+        <h3>Create</h3>
         <form method="post" action="/admin/api-tokens">
             <input type="hidden" name="csrf" value="<?php echo htmlspecialchars(\VMForge\Core\Security::csrfToken()); ?>">
-            <input name="name" placeholder="token name" required>
-            <input name="scopes" placeholder="api:*" value="api:*">
-            <button type="submit">Create</button>
-        </form></div>';
+            <select name="scope"><option value="project">project</option><option value="admin">admin</option></select>
+            <button type="submit">Create Token</button>
+        </form>
+        <p>The token will be scoped to the current project unless scope=admin and you are an admin.</p>
+        </div>';
         View::render('API Tokens', $html);
     }
     public function store() {
         Auth::require();
         Security::requireCsrf($_POST['csrf'] ?? null);
         $user = Auth::user();
-        $token = bin2hex(random_bytes(24));
+        $scope = $_POST['scope'] ?? 'project';
+        if ($scope === 'admin' && empty($user['is_admin'])) { http_response_code(403); echo 'admin scope requires admin user'; return; }
+        $token = bin2hex(random_bytes(32));
         $hash = Security::hashToken($token);
-        $st = DB::pdo()->prepare('INSERT INTO api_tokens(user_id, token_hash, name, scopes) VALUES (?,?,?,?)');
-        $st->execute([(int)$user['id'], $hash, ($_POST['name'] ?? 'token'), ($_POST['scopes'] ?? 'api:*')]);
-        header('Location: /admin/api-tokens?tok='.$token);
+        $pid = Policy::currentProjectId();
+        $pdo = DB::pdo();
+        $st = $pdo->prepare('INSERT INTO api_tokens(user_id, token_hash, project_id, scope) VALUES (?,?,?,?)');
+        $st->execute([(int)$user['id'], $hash, $scope==='project' ? $pid : null, $scope]);
+        echo '<div class="card"><h3>New Token (copy now)</h3><pre>'.htmlspecialchars($token).'</pre><p>Scope: '.htmlspecialchars($scope).'; Project: '.htmlspecialchars((string)$pid).'</p></div>';
     }
 }

@@ -1,31 +1,37 @@
 <?php
 namespace VMForge\Controllers;
 use VMForge\Core\View;
-use VMForge\Models\User;
+use VMForge\Core\Auth;
 
 class AuthController {
     public function showLogin() {
         $html = '<div class="card"><h2>Login</h2>
         <form method="post" action="/login">
-        <div><input name="email" placeholder="Email" required></div><br>
-        <div><input type="password" name="password" placeholder="Password" required></div><br>
-        <button type="submit">Login</button>
+            <input name="email" type="email" placeholder="email" required>
+            <input name="password" type="password" placeholder="password" required>
+            <button type="submit">Login</button>
         </form></div>';
+        if (!empty($_SESSION['2fa_uid'])) {
+            $html .= '<div class="card"><h3>One-Time Code</h3>
+            <form method="post" action="/login?otp=1">
+                <input name="code" placeholder="123456" pattern="\d{6}" required>
+                <button type="submit">Verify</button>
+            </form></div>';
+        }
         View::render('Login', $html);
     }
     public function login() {
-        session_start();
-        $email = $_POST['email'] ?? '';
-        $pass = $_POST['password'] ?? '';
-        $u = User::findByEmail($email);
-        if ($u && password_verify($pass, $u['password_hash'])) {
-            $_SESSION['uid'] = $u['id'];
-            header('Location: /'); exit;
+        if (isset($_GET['otp'])) {
+            $ok = Auth::verifyTotp($_POST['code'] ?? '');
+            if ($ok) { header('Location: /'); return; }
+            header('Location: /login'); return;
         }
-        header('Location: /login');
+        $ok = Auth::login($_POST['email'] ?? '', $_POST['password'] ?? '');
+        if ($ok && empty($_SESSION['2fa_uid'])) { header('Location: /'); return; }
+        header('Location: /login'); return;
     }
     public function logout() {
-        session_start(); session_destroy();
+        Auth::logout();
         header('Location: /login');
     }
 }

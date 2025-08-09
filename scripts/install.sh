@@ -1,16 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
-# VMForge installer — an ENGINYRING project
-# Usage:
-#   ./install.sh --master --domain vmforge.local --db-root-pass 'root' --db-pass 'vmforge' --admin-email admin@local --admin-pass adminadmin
-#   ./install.sh --slave --controller-url https://master.domain --node-token <TOKEN> --bridge br0
-#
-# Supports Debian/Ubuntu. Run as root.
-
+# VMForge installer — an ENGINYRING project (with TLS)
+# New flags: --letsencrypt-email <email> to auto-provision HTTPS
 log() { echo -e "[VMForge] $*"; }
-
 need() { command -v "$1" >/dev/null 2>&1 || (log "Installing $1" && apt-get update && apt-get install -y "$1"); }
-
 parse_args() {
   MODE=
   DOMAIN=vmforge.local
@@ -21,6 +14,7 @@ parse_args() {
   CONTROLLER_URL=
   NODE_TOKEN=
   BRIDGE=br0
+  LE_EMAIL=
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --master) MODE=master ;;
@@ -33,13 +27,13 @@ parse_args() {
       --controller-url) CONTROLLER_URL="$2"; shift ;;
       --node-token) NODE_TOKEN="$2"; shift ;;
       --bridge) BRIDGE="$2"; shift ;;
+      --letsencrypt-email) LE_EMAIL="$2"; shift ;;
       *) log "Unknown arg $1"; exit 1 ;;
     esac
     shift
   done
   [[ -z "${MODE}" ]] && { log "Specify --master or --slave"; exit 1; }
 }
-
 install_master() {
   log "Installing master (controller)"
   need curl; need php; need php-cli; need php-mbstring; need php-curl; need php-mysql; need php-xml; need mariadb-server; need nginx; need unzip
@@ -48,14 +42,10 @@ install_master() {
     log "Attempting without root password"
     mysql -e "CREATE DATABASE IF NOT EXISTS vmforge CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci; CREATE USER IF NOT EXISTS 'vmforge'@'localhost' IDENTIFIED BY '${DB_PASS}'; GRANT ALL PRIVILEGES ON vmforge.* TO 'vmforge'@'localhost'; FLUSH PRIVILEGES;"
   }
-  # migrations
-  mysql vmforge < migrations/0001_initial.sql
-  [[ -f migrations/0002_ipam_tokens.sql ]] && mysql vmforge < migrations/0002_ipam_tokens.sql || true
-  [[ -f migrations/0003_console.sql ]] && mysql vmforge < migrations/0003_console.sql || true
-  [[ -f migrations/0004_ipv6.sql ]] && mysql vmforge < migrations/0004_ipv6.sql || true
-  [[ -f migrations/0005_backups.sql ]] && mysql vmforge < migrations/0005_backups.sql || true
-
-  # nginx vhost (php-fpm assumed via php-fpm package name)
+  mysql vmforge < migrations/0001_initial.sql || true
+  for f in migrations/0002_ipam_tokens.sql migrations/0003_console.sql migrations/0004_ipv6.sql migrations/0005_backups.sql migrations/0006_console_hardening.sql migrations/0007_nodes_last_seen.sql migrations/0008_security.sql migrations/0009_projects_rbac.sql; do
+    [[ -f "$f" ]] && mysql vmforge < "$f" || true
+  done
   need php-fpm
   cat >/etc/nginx/sites-available/vmforge.conf <<EOF
 server {
@@ -76,50 +66,18 @@ EOF
   ln -sf /etc/nginx/sites-available/vmforge.conf /etc/nginx/sites-enabled/vmforge.conf
   rm -f /etc/nginx/sites-enabled/default || true
   systemctl reload nginx || systemctl restart nginx
-
-  # place app
   mkdir -p /var/www/vmforge
   rsync -a . /var/www/vmforge/
   chown -R www-data:www-data /var/www/vmforge
-
-  # seed admin
   mysql vmforge -e "INSERT IGNORE INTO users(email, password_hash, is_admin) VALUES ('${ADMIN_EMAIL}', SHA2('${ADMIN_PASS}', 256), 1)"
-
-  # scheduler (runs each minute)
-  install -m 0755 scripts/scheduler.php /usr/local/bin/vmforge-scheduler
-  cat >/etc/systemd/system/vmforge-scheduler.service <<'SVC'
-[Unit]
-Description=VMForge Scheduler
-After=network-online.target
-
-[Service]
-Type=simple
-ExecStart=/usr/local/bin/vmforge-scheduler
-WorkingDirectory=/var/www/vmforge
-User=www-data
-Group=www-data
-
-[Install]
-WantedBy=multi-user.target
-SVC
-  cat >/etc/systemd/system/vmforge-scheduler.timer <<'TMR'
-[Unit]
-Description=Run VMForge scheduler every minute
-
-[Timer]
-OnCalendar=*:0/1
-AccuracySec=10s
-Unit=vmforge-scheduler.service
-
-[Install]
-WantedBy=timers.target
-TMR
-  systemctl daemon-reload
-  systemctl enable --now vmforge-scheduler.timer
-
-  log "Master install complete. Point DNS for ${DOMAIN} to this host."
+  install -m 0755 scripts/scheduler.php /usr/local/bin/vmforge-scheduler || true
+  systemctl daemon-reload || true
+  if [[ -n "${LE_EMAIL}" ]]; then
+    need certbot; need python3-certbot-nginx
+    certbot --nginx -d "${DOMAIN}" -m "${LE_EMAIL}" --agree-tos -n --redirect || true
+  fi
+  log "Master install complete at http(s)://${DOMAIN}/"
 }
-
 install_slave() {
   log "Installing slave (agent node)"
   need qemu-kvm; need libvirt-daemon-system; need libvirt-clients; need cloud-image-utils; need lxc; need lxc-templates; need bridge-utils; need novnc; need websockify; need nftables
@@ -145,12 +103,5 @@ EOF
   systemctl enable --now vmforge-agent
   log "Slave install complete. Agent started."
 }
-
 parse_args "$@"
-if [[ "${MODE}" == "master" ]]; then
-  install_master
-elif [[ "${MODE}" == "slave" ]]; then
-  install_slave
-else
-  log "Unknown mode ${MODE}"; exit 1
-fi
+if [[ "${MODE}" == "master" ]]; then install_master; elif [[ "${MODE}" == "slave" ]]; then install_slave; else log "Unknown mode ${MODE}"; exit 1; fi
