@@ -15,6 +15,7 @@ class View {
             . '<a href="/admin/api-tokens">API Tokens</a> '
             . '<a href="/admin/backups">Backups</a> '
             . '<a href="/admin/network">Network</a> '
+            . '<a href="/admin/jobs">Jobs</a> '
             . '<a href="/logout">Logout</a>'
             . '</div></div>';
         echo '<div class="container">';

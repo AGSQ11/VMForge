@@ -1,13 +1,13 @@
 <?php
 declare(strict_types=1);
-
 require __DIR__ . '/../src/bootstrap.php';
-
 use VMForge\Core\Router;
 use VMForge\Controllers\HomeController;
 use VMForge\Controllers\AuthController;
 use VMForge\Controllers\NodeController;
 use VMForge\Controllers\VMController;
+use VMForge\Controllers\VMDetailsController;
+use VMForge\Controllers\JobsController;
 use VMForge\Controllers\AgentController;
 use VMForge\Controllers\APIController;
 use VMForge\Controllers\ImagesController;
@@ -30,6 +30,10 @@ $router->post('/admin/nodes', [NodeController::class, 'store']);
 
 $router->get('/admin/vms', [VMController::class, 'index']);
 $router->post('/admin/vms', [VMController::class, 'store']);
+$router->get('/admin/vm', [VMDetailsController::class, 'show']);
+$router->post('/admin/vm-action', [VMDetailsController::class, 'action']);
+
+$router->get('/admin/jobs', [JobsController::class, 'index']);
 
 $router->get('/admin/images', [ImagesController::class, 'index']);
 $router->post('/admin/images', [ImagesController::class, 'store']);
