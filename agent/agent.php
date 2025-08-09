@@ -51,65 +51,6 @@ function executeJob(string $type, array $p, string $bridge): array {
 }
 
 function kvm_create(array $p, string $bridge): array {
-    $uuid = $p['uuid'] ?? uniqid('vm-', true);
-    $name = $p['name'] ?? "vm-$uuid";
-    $vcpus = (int)($p['vcpus'] ?? 2);
-    $mem = (int)($p['memory_mb'] ?? 2048);
-    $disk = (int)($p['disk_gb'] ?? 20);
-    $imgPath = "/var/lib/libvirt/images/{$name}.qcow2";
-    [$c1, $o1, $e1] = Shell::run("qemu-img create -f qcow2 {$imgPath} {$disk}G");
-    if ($c1 !== 0) return [false, $e1 ?: $o1];
-
-    $bridgeName = $p['bridge'] ?? $bridge;
-    $ip = $p['ip_address'] ?? '';
-    $imageId = (int)($p['image_id'] ?? 1);
-    // Minimal domain XML
-    $xml = <<<XML
-<domain type='kvm'>
-  <name>{$name}</name>
-  <memory unit='MiB'>{$mem}</memory>
-  <vcpu placement='static'>{$vcpus}</vcpu>
-  <os>
-    <type arch='x86_64' machine='pc-q35-7.2'>hvm</type>
-  </os>
-  <devices>
-    <disk type='file' device='disk'>
-      <driver name='qemu' type='qcow2'/>
-      <source file='{$imgPath}'/>
-      <target dev='vda' bus='virtio'/>
-    </disk>
-    <interface type='bridge'>
-      <source bridge='{$bridgeName}'/>
-      <model type='virtio'/>
-    </interface>
-    <graphics type='vnc' port='-1' autoport='yes'/>
-  </devices>
-</domain>
-XML;
-    $tmp = sys_get_temp_dir() . "/vmforge-{$name}.xml";
-    file_put_contents($tmp, $xml);
-    [$c2, $o2, $e2] = Shell::run("virsh define {$tmp} && virsh start {$name}");
-    if ($c2 !== 0) return [false, $e2 ?: $o2];
-    return [true, "defined+started {$name}"];
-}
-
-function lxc_create(array $p, string $bridge): array {
-    $name = $p['name'] ?? uniqid('ct-', true);
-    $release = $p['release'] ?? 'bookworm';
-    $arch = $p['arch'] ?? 'amd64';
-    $bridgeName = $p['bridge'] ?? $bridge;
-    [$c1,$o1,$e1] = Shell::run("lxc-create -n {$name} -t download -- --dist debian --release {$release} --arch {$arch}");
-    if ($c1 !== 0) return [false, $e1 ?: $o1];
-    $conf = "/var/lib/lxc/{$name}/config";
-    $net = "\nlxc.net.0.type = veth\nlxc.net.0.link = {$bridgeName}\nlxc.net.0.flags = up\n";
-    file_put_contents($conf, $net, FILE_APPEND);
-    [$c2,$o2,$e2] = Shell::run("lxc-start -n {$name}");
-    if ($c2 !== 0) return [false, $e2 ?: $o2];
-    return [true, "created+started {$name}"];
-}
-
-
-function kvm_create(array $p, string $bridge): array {
     $uuid  = $p['uuid'] ?? uniqid('vm-', true);
     $name  = $p['name'] ?? "vm-$uuid";
     $vcpus = (int)($p['vcpus'] ?? 2);
@@ -118,15 +59,15 @@ function kvm_create(array $p, string $bridge): array {
     $imgId = (int)($p['image_id'] ?? 1);
     $br    = $p['bridge'] ?? $bridge;
 
-    $im = new \VMForge\Services\ImageManager();
+    $im = new ImageManager();
     [$ok, $base] = $im->downloadIfMissing($imgId);
     if (!$ok) return [false, "image: ".$base];
 
     $overlay = "/var/lib/libvirt/images/{$name}.qcow2";
-    [$c0,$o0,$e0] = \VMForge\Core\Shell::run("qemu-img create -f qcow2 -b ".escapeshellarg($base)." -F qcow2 ".escapeshellarg($overlay));
+    [$c0,$o0,$e0] = Shell::run("qemu-img create -f qcow2 -b ".escapeshellarg($base)." -F qcow2 ".escapeshellarg($overlay));
     if ($c0 !== 0) return [false, $e0 ?: $o0];
 
-    [$cg,$og,$eg] = \VMForge\Core\Shell::run("qemu-img resize ".escapeshellarg($overlay)." ".escapeshellarg("{$disk}G"));
+    [$cg,$og,$eg] = Shell::run("qemu-img resize ".escapeshellarg($overlay)." ".escapeshellarg("{$disk}G"));
     if ($cg !== 0) return [false, $eg ?: $og];
 
     $seedDir = "/var/lib/libvirt/seed/{$name}";
@@ -134,7 +75,7 @@ function kvm_create(array $p, string $bridge): array {
     if (!empty($p['ip_address'])) {
         $net = ['address'=>$p['ip_address'], 'prefix'=>$p['prefix'] ?? 24, 'gateway'=>$p['gateway'] ?? '', 'dns'=>$p['dns'] ?? ['1.1.1.1']];
     }
-    [$cs,$co,$ce] = \VMForge\Services\CloudInit::buildSeedISO($seedDir, $name, $name, $p['ci_user'] ?? 'admin', $p['ssh_key'] ?? null, $p['ci_password'] ?? null, $net);
+    [$cs,$co,$ce] = CloudInit::buildSeedISO($seedDir, $name, $name, $p['ci_user'] ?? 'admin', $p['ssh_key'] ?? null, $p['ci_password'] ?? null, $net);
     if ($cs !== 0) return [false, $ce ?: $co];
 
     $xml = <<<XML
@@ -161,7 +102,22 @@ function kvm_create(array $p, string $bridge): array {
 XML;
     $tmp = sys_get_temp_dir() . "/vmforge-{$name}.xml";
     file_put_contents($tmp, $xml);
-    [$c2, $o2, $e2] = \VMForge\Core\Shell::run("virsh define {$tmp} && virsh start {$name}");
+    [$c2, $o2, $e2] = Shell::run("virsh define {$tmp} && virsh start {$name}");
     if ($c2 !== 0) return [false, $e2 ?: $o2];
     return [true, "defined+started {$name} with cloud-init"];
+}
+
+function lxc_create(array $p, string $bridge): array {
+    $name = $p['name'] ?? uniqid('ct-', true);
+    $release = $p['release'] ?? 'bookworm';
+    $arch = $p['arch'] ?? 'amd64';
+    $bridgeName = $p['bridge'] ?? $bridge;
+    [$c1,$o1,$e1] = Shell::run("lxc-create -n {$name} -t download -- --dist debian --release {$release} --arch {$arch}");
+    if ($c1 !== 0) return [false, $e1 ?: $o1];
+    $conf = "/var/lib/lxc/{$name}/config";
+    $net = "\nlxc.net.0.type = veth\nlxc.net.0.link = {$bridgeName}\nlxc.net.0.flags = up\n";
+    file_put_contents($conf, $net, FILE_APPEND);
+    [$c2,$o2,$e2] = Shell::run("lxc-start -n {$name}");
+    if ($c2 !== 0) return [false, $e2 ?: $o2];
+    return [true, "created+started {$name}"];
 }
