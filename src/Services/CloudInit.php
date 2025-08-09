@@ -14,15 +14,27 @@ class CloudInit {
 
         $netData = '';
         if ($net) {
-            // netplan v2 format minimal for a single interface
             $netData = "version: 2\n";
-            $netData .= "ethernets:\n  ens3:\n    dhcp4: false\n    addresses: [{$net['address']}/{$net['prefix']}]\n    gateway4: {$net['gateway']}\n    nameservers:\n      addresses: [".implode(', ', array_map(fn($d)=>$d, $net['dns'] ?? ['1.1.1.1']))."]\n";
+            $netData .= "ethernets:\n  ens3:\n";
+            if (!empty($net['ipv4'])) {
+                $v4 = $net['ipv4'];
+                $netData .= "    addresses: [{$v4['address']}/{$v4['prefix']}]\n";
+                if (!empty($v4['gateway'])) $netData .= "    gateway4: {$v4['gateway']}\n";
+            } else {
+                $netData .= "    dhcp4: true\n";
+            }
+            if (!empty($net['ipv6'])) {
+                $v6 = $net['ipv6'];
+                $netData .= "    addresses: [{$v6['address']}/{$v6['prefix']}]\n";
+                if (!empty($v6['gateway'])) $netData .= "    gateway6: {$v6['gateway']}\n";
+            }
+            $dns = $net['dns'] ?? ['1.1.1.1','8.8.8.8'];
+            $netData .= "    nameservers:\n      addresses: [".implode(', ', $dns)."]\n";
         }
-        $tmp = rtrim($dir, '/');
-        file_put_contents("{$tmp}/user-data", $userData);
-        file_put_contents("{$tmp}/meta-data", $metaData);
-        if ($netData) file_put_contents("{$tmp}/network-config", $netData);
-        $cmd = "cloud-localds -v ".escapeshellarg("{$tmp}/seed.iso")." ".escapeshellarg("{$tmp}/user-data")." ".($netData?escapeshellarg("{$tmp}/network-config"):"");
+        file_put_contents("{$dir}/user-data", $userData);
+        file_put_contents("{$dir}/meta-data", $metaData);
+        if ($netData) file_put_contents("{$dir}/network-config", $netData);
+        $cmd = "cloud-localds -v ".escapeshellarg("{$dir}/seed.iso")." ".escapeshellarg("{$dir}/user-data")." ".($netData?escapeshellarg("{$dir}/network-config"):"");
         return Shell::run($cmd);
     }
 }
