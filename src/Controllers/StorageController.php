@@ -20,14 +20,14 @@ class StorageController {
       <tr><th>ID</th><th>Name</th><th>Driver</th><th>Config</th></tr>
     </thead>
     <tbody>
-      <?php foreach ($pools as $p): ?>
+      <?php foreach ($pools as $p) { ?>
         <tr>
-          <td><?= (int)$p['id'] ?></td>
-          <td><?= htmlspecialchars($p['name']) ?></td>
-          <td><?= htmlspecialchars($p['driver']) ?></td>
-          <td><code><?= htmlspecialchars($p['config']) ?></code></td>
+          <td><?php echo (int)$p['id']; ?></td>
+          <td><?php echo htmlspecialchars($p['name']); ?></td>
+          <td><?php echo htmlspecialchars($p['driver']); ?></td>
+          <td><code><?php echo htmlspecialchars($p['config']); ?></code></td>
         </tr>
-      <?php endforeach; ?>
+      <?php } ?>
     </tbody>
   </table>
 </div>
@@ -35,7 +35,7 @@ class StorageController {
 <div class="card">
   <h3>Add Pool</h3>
   <form method="post" action="/admin/storage">
-    <input type="hidden" name="csrf" value="<?= htmlspecialchars($csrf) ?>">
+    <input type="hidden" name="csrf" value="<?php echo htmlspecialchars($csrf); ?>">
     <input name="name" placeholder="name" required>
     <select name="driver">
       <option value="qcow2">qcow2</option>
