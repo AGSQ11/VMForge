@@ -2,10 +2,8 @@
 namespace VMForge\Controllers;
 use VMForge\Core\Auth;
 use VMForge\Core\View;
-use VMForge\Core\DB;
 use VMForge\Core\Security;
 use VMForge\Services\Storage;
-use PDO;
 
 class StorageController {
     public function index() {
@@ -13,12 +11,8 @@ class StorageController {
         $pools = Storage::all();
         $csrf = Security::csrfToken();
 
-        $rows = '';
-        foreach ($pools as $p) {
-            $rows .= '<tr><td>'.(int)$p['id'].'</td><td>'.htmlspecialchars($p['name']).'</td><td>'.htmlspecialchars($p['driver']).'</td><td><code>'.htmlspecialchars($p['config']).'</code></td></tr>';
-        }
-
-        $table = <<<HTML_TABLE
+        ob_start();
+        ?>
 <div class="card">
   <h2>Storage Pools</h2>
   <table class="table">
@@ -26,29 +20,35 @@ class StorageController {
       <tr><th>ID</th><th>Name</th><th>Driver</th><th>Config</th></tr>
     </thead>
     <tbody>
-      {$rows}
+      <?php foreach ($pools as $p): ?>
+        <tr>
+          <td><?= (int)$p['id'] ?></td>
+          <td><?= htmlspecialchars($p['name']) ?></td>
+          <td><?= htmlspecialchars($p['driver']) ?></td>
+          <td><code><?= htmlspecialchars($p['config']) ?></code></td>
+        </tr>
+      <?php endforeach; ?>
     </tbody>
   </table>
 </div>
-HTML_TABLE;
 
-        $form = <<<HTML_FORM
-<div class="card"><h3>Add Pool</h3>
-<form method="post" action="/admin/storage">
-  <input type="hidden" name="csrf" value="{$csrf}">
-  <input name="name" placeholder="name" required>
-  <select name="driver">
-    <option value="qcow2">qcow2</option>
-    <option value="lvmthin">lvmthin</option>
-    <option value="zfs">zfs</option>
-  </select>
-  <textarea name="config" placeholder='{"vg":"vg0","thinpool":"thinpool0"} OR {"pool":"tank","dataset":"vmforge"}'></textarea>
-  <button type="submit">Create</button>
-</form>
+<div class="card">
+  <h3>Add Pool</h3>
+  <form method="post" action="/admin/storage">
+    <input type="hidden" name="csrf" value="<?= htmlspecialchars($csrf) ?>">
+    <input name="name" placeholder="name" required>
+    <select name="driver">
+      <option value="qcow2">qcow2</option>
+      <option value="lvmthin">lvmthin</option>
+      <option value="zfs">zfs</option>
+    </select>
+    <textarea name="config" placeholder='{"vg":"vg0","thinpool":"thinpool0"} OR {"pool":"tank","dataset":"vmforge"}'></textarea>
+    <button type="submit">Create</button>
+  </form>
 </div>
-HTML_FORM;
-
-        View::render('Storage', $table . $form);
+        <?php
+        $html = ob_get_clean();
+        View::render('Storage', $html);
     }
 
     public function store() {
