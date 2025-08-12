@@ -77,7 +77,7 @@ The installer is designed with security in mind. During a master installation, t
 
 ### Apache Configuration Notes
 
-When using the Apache web server, the installer assumes that the `rewrite` and `headers` modules are available. These are standard modules and are typically enabled by default in a LAMP stack environment.
+When using the Apache web server, the installer automatically enables the `rewrite` and `headers` modules on Debian-based systems. These are standard modules and are typically available in a default LAMP stack environment.
 
 ## Supported Operating Systems
 
