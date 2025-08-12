@@ -35,9 +35,36 @@ use VMForge\Controllers\Subnets6Controller;
 use VMForge\Controllers\BandwidthController;
 use VMForge\Controllers\ZFSReposController;
 use VMForge\Controllers\FirewallController;
+use VMForge\Controllers\BillingController;
+use VMForge\Controllers\RbacController;
+use VMForge\Controllers\Client\VMController as ClientVMController;
+use VMForge\Controllers\TicketController;
+use VMForge\Controllers\SetupController;
+use VMForge\Core\DB;
 
 Headers::sendSecurityHeaders();
 Headers::initSession();
+
+// --- Initial Setup Check ---
+try {
+    if (DB::pdo()->query('SELECT COUNT(*) FROM users')->fetchColumn() === 0) {
+        $path = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH);
+        $controller = new SetupController();
+
+        if ($path === '/setup' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+            $controller->createAdminUser();
+        } else {
+            $controller->showSetupForm();
+        }
+        exit();
+    }
+} catch (\PDOException $e) {
+    // Migrations probably haven't run. Force setup.
+    $controller = new SetupController();
+    $controller->showSetupForm();
+    exit();
+}
+
 
 $router = new Router();
 
@@ -117,6 +144,25 @@ $router->post('/admin/zfs-repos', [ZFSReposController::class, 'store']);
 
 $router->get('/admin/firewall', [FirewallController::class, 'index']);
 $router->post('/admin/firewall', [FirewallController::class, 'store']);
+
+$router->get('/admin/rbac', [RbacController::class, 'index']);
+$router->get('/admin/rbac/role', [RbacController::class, 'editRole']);
+$router->post('/admin/rbac/role', [RbacController::class, 'updateRole']);
+
+$router->get('/admin/tickets', [TicketController::class, 'adminIndex']);
+
+// Billing
+$router->get('/billing', [BillingController::class, 'index']);
+$router->get('/billing/products', [BillingController::class, 'products']);
+$router->post('/billing/subscribe', [BillingController::class, 'subscribe']);
+
+// Client Area
+$router->get('/client/vms', [ClientVMController::class, 'index']);
+$router->get('/tickets', [TicketController::class, 'index']);
+$router->get('/tickets/new', [TicketController::class, 'create']);
+$router->post('/tickets/new', [TicketController::class, 'store']);
+$router->get('/tickets/show', [TicketController::class, 'show']);
+$router->post('/tickets/reply', [TicketController::class, 'reply']);
 
 // Health
 $router->get('/healthz', [HealthController::class, 'index']);

@@ -1,8 +1,23 @@
 <?php
 namespace VMForge\Core;
 use PDO;
+use VMForge\Models\User;
 
 class Policy {
+    public static function can(string $permissionName): bool
+    {
+        $user = Auth::user();
+        if (!$user) {
+            return false;
+        }
+
+        // The user object from Auth::user() has an 'is_admin' flag for backward compatibility.
+        if (!empty($user['is_admin'])) {
+            return true;
+        }
+        return in_array($permissionName, $user['permissions'] ?? []);
+    }
+
     public static function isAdmin(?array $user): bool {
         return $user && !empty($user['is_admin']);
     }

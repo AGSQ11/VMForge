@@ -73,6 +73,7 @@ class Auth {
         $_SESSION['uid'] = $userId;
         $_SESSION['fp']  = self::fingerprint();
         $_SESSION['t']   = time();
+        $_SESSION['permissions'] = \VMForge\Models\User::getPermissions($userId);
     }
 
     public static function logout(): void {
@@ -97,8 +98,24 @@ class Auth {
         return (int)($_SESSION['uid'] ?? 0) ?: null;
     }
 
-    public static function require(): void {
+    public static function user(): ?array
+    {
         if (!self::check()) {
+            return null;
+        }
+        $user = \VMForge\Models\User::findById((int)$_SESSION['uid']);
+        if ($user) {
+            $user['permissions'] = $_SESSION['permissions'] ?? [];
+            // For backward compatibility with Policy::isAdmin
+            if (\VMForge\Models\User::hasRole($user['id'], 'admin')) {
+                $user['is_admin'] = true;
+            }
+        }
+        return $user;
+    }
+
+    public static function require(): void {
+        if (!self::user()) {
             http_response_code(302);
             header('Location: /login');
             exit;

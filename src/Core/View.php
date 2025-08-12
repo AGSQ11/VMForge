@@ -1,5 +1,7 @@
 <?php
 namespace VMForge\Core;
+use VMForge\Core\Policy;
+use VMForge\Core\Auth;
 class View {
     public static function render(string $title, string $contentHtml): void {
         $brand = $_ENV['APP_NAME'] ?? 'VMForge — an ENGINYRING project';
@@ -8,27 +10,46 @@ class View {
             . htmlspecialchars($title) . ' — ' . htmlspecialchars($brand) .
             '</title><link rel="stylesheet" href="/assets/css/app.css"></head><body>';
         echo '<div class="header"><div>' . htmlspecialchars($brand) . ' — <small>'.htmlspecialchars($proj).'</small></div>';
-        echo '<div>'
-            . '<a href="/admin/nodes">Nodes</a> '
-            . '<a href="/admin/vms">VMs</a> '
-            . '<a href="/admin/images">Images</a> '
-            . '<a href="/admin/isos">ISOs</a> '
-            . '<a href="/admin/ip-pools">IP Pools</a> '
-            . '<a href="/admin/api-tokens">API Tokens</a> '
-            . '<a href="/admin/backups">Backups</a> '
-            . '<a href="/admin/network">Network</a> '
-            . '<a href="/admin/subnets">Subnets</a> '
-            . '<a href="/admin/subnets6">IPv6</a> '
-            . '<a href="/admin/bandwidth">Bandwidth</a> '
-            . '<a href="/admin/zfs-repos">ZFS Repos</a> '
-            . '<a href="/admin/firewall">Firewall</a> '
-            . '<a href="/admin/jobs">Jobs</a> '
-            . '<a href="/admin/projects">Projects</a> '
-            . '<a href="/admin/storage">Storage</a> '
-            . '<a href="/admin/metrics">Metrics</a> '
-            . '<a href="/settings/2fa">2FA</a> '
-            . '<a href="/logout">Logout</a>'
-            . '</div></div>';
+        $user = Auth::user();
+        $isAdmin = $user && !empty($user['is_admin']);
+
+        if ($isAdmin) {
+            echo '<div>'
+                . '<a href="/admin/nodes">Nodes</a> '
+                . '<a href="/admin/vms">VMs</a> '
+                . '<a href="/admin/images">Images</a> '
+                . '<a href="/admin/isos">ISOs</a> '
+                . '<a href="/admin/ip-pools">IP Pools</a> '
+                . '<a href="/admin/api-tokens">API Tokens</a> '
+                . (Policy::can('rbac.manage') ? '<a href="/admin/rbac">RBAC</a> ' : '')
+                . '<a href="/admin/backups">Backups</a> '
+                . '<a href="/admin/network">Network</a> '
+                . '<a href="/admin/subnets">Subnets</a> '
+                . '<a href="/admin/subnets6">IPv6</a> '
+                . '<a href="/admin/bandwidth">Bandwidth</a> '
+                . '<a href="/admin/zfs-repos">ZFS Repos</a> '
+                . '<a href="/admin/firewall">Firewall</a> '
+                . '<a href="/admin/jobs">Jobs</a> '
+            . (Policy::can('tickets.manage') ? '<a href="/admin/tickets">Tickets</a> ' : '')
+                . '<a href="/admin/projects">Projects</a> '
+                . '<a href="/billing">Billing</a> '
+                . '<a href="/admin/storage">Storage</a> '
+                . '<a href="/admin/metrics">Metrics</a> '
+                . '<a href="/settings/2fa">2FA</a> '
+                . '<a href="/logout">Logout</a>'
+                . '</div></div>';
+        } else if ($user) {
+            echo '<div>'
+                . '<a href="/">Dashboard</a> '
+                . '<a href="/client/vms">My Services</a> '
+                . '<a href="/billing">Billing</a> '
+                . '<a href="/tickets">Support</a> '
+                . '<a href="/settings/2fa">2FA</a> '
+                . '<a href="/logout">Logout</a>'
+                . '</div></div>';
+        } else {
+            echo '<div></div></div>'; // Empty for logged out users
+        }
         echo '<div class="container">';
         echo $contentHtml;
         echo '<div class="footer">VMForge — an ENGINYRING project</div>';

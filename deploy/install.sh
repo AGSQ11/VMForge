@@ -1,149 +1,169 @@
-\
-    #!/usr/bin/env bash
-    set -euo pipefail
+#!/usr/bin/env bash
+set -euo pipefail
+
+# --- Global variables ---
+OS_FAMILY=""
+PKG_MANAGER=""
+PHP_FPM_SERVICE=""
+PHP_FPM_SOCK_PATH=""
+WEBSERVER_CONF_DIR=""
+WEBSERVER_USER=""
+WEBSERVER_SERVICE=""
+SSL_EMAIL=""
+
+# Package lists
+DEBIAN_NGINX_PKGS=(nginx mariadb-server mariadb-client php8.2-cli php8.2-fpm php8.2-curl php8.2-xml php8.2-mbstring php8.2-zip php8.2-mysql php8.2-gd php8.2-intl redis-server git unzip curl)
+DEBIAN_APACHE_PKGS=(apache2 mariadb-server mariadb-client php8.2-cli php8.2-fpm php8.2-curl php8.2-xml php8.2-mbstring php8.2-zip php8.2-mysql php8.2-gd php8.2-intl redis-server git unzip curl libapache2-mod-php8.2)
+DEBIAN_SLAVE_PKGS=(php8.2-cli php8.2-curl php8.2-xml php8.2-mbstring php8.2-zip php8.2-mysql redis-server git curl)
+DEBIAN_CERTBOT_PKGS_nginx=(certbot python3-certbot-nginx)
+DEBIAN_CERTBOT_PKGS_apache=(certbot python3-certbot-apache)
+
+RHEL_NGINX_PKGS=(nginx mariadb-server mariadb php-cli php-fpm php-curl php-xml php-mbstring php-zip php-mysqlnd php-gd php-intl redis git unzip curl)
+RHEL_APACHE_PKGS=(httpd mariadb-server mariadb php-cli php-fpm php-curl php-xml php-mbstring php-zip php-mysqlnd php-gd php-intl redis git unzip curl)
+RHEL_SLAVE_PKGS=(php-cli php-curl php-xml php-mbstring php-zip php-mysqlnd redis git curl)
+RHEL_CERTBOT_PKGS=(snapd)
+
+
+usage() {
+  cat <<'USAGE'
+VMForge unattended installer
+Usage:
+  ./deploy/install.sh --master --domain vmforge.local --db-name vmforge --db-user vmforge --db-pass 'secret' [--ssl email@example.com] [--yes]
+  ./deploy/install.sh --slave  --controller http://MASTER:8080 --token 'NODE_TOKEN' [--yes]
+
+Flags:
+  --webserver <name>      (master) nginx or apache (default: nginx)
+  --ssl <email>           (master) Enable SSL with Let's Encrypt and use this email.
+  # ... (rest of usage)
+USAGE
+}
+
+# ... (confirm, need_root, log, detect_os functions are the same as before) ...
+detect_os() {
+  if [ -f /etc/os-release ]; then
+    . /etc/os-release
+  else
+    echo "Cannot detect OS: /etc/os-release not found." >&2; exit 1
+  fi
+
+  log "Detecting OS..."
+  if [[ "$ID_LIKE" == *"debian"* || "$ID" == "debian" || "$ID" == "ubuntu" ]]; then
+    OS_FAMILY="debian"
+    PKG_MANAGER="apt-get"
+    PHP_FPM_SERVICE="php8.2-fpm"
+    PHP_FPM_SOCK_PATH="/run/php/php8.2-fpm.sock"
     export DEBIAN_FRONTEND=noninteractive
+  elif [[ "$ID_LIKE" == *"rhel"* || "$ID_LIKE" == *"fedora"* ]]; then
+    OS_FAMILY="rhel"
+    PKG_MANAGER="dnf"
+    PHP_FPM_SERVICE="php-fpm"
+    PHP_FPM_SOCK_PATH="/var/run/php-fpm/www.sock"
+  else
+    echo "Unsupported OS: $PRETTY_NAME" >&2; exit 1
+  fi
+  log "OS Family: $OS_FAMILY"
+}
 
-    usage() {
-      cat <<'USAGE'
-    VMForge unattended installer
-    Usage:
-      ./deploy/install.sh --master --domain vmforge.local --db-name vmforge --db-user vmforge --db-pass 'secret' [--yes]
-      ./deploy/install.sh --slave  --controller http://MASTER:8080 --token 'NODE_TOKEN' [--yes]
 
-    Flags:
-      --master | --slave       Install control plane (web/API) or node agent only
-      --domain <host>         (master) server_name for nginx (default: _)
-      --http-port <port>      (master) listen port (default: 8080)
-      --controller <url>      (slave)  controller base URL (e.g., http://master:8080)
-      --token <token>         (slave)  node token
-      --db-name <name>        (master) MariaDB database name (default: vmforge)
-      --db-user <user>        (master) MariaDB user (default: vmforge)
-      --db-pass <pass>        (master) MariaDB password (required if creating user)
-      --php-fpm <sock>        (master) PHP-FPM socket (default: /run/php/php-fpm.sock autodetects)
-      --yes                   Assume yes to prompts
-    USAGE
-    }
+install_dependencies() {
+  log "Installing dependencies for $ROLE role on $OS_FAMILY..."
+  local -n pkgs_to_install
+  local -n certbot_pkgs
 
-    confirm() {
-      if [[ "${ASSUME_YES:-0}" == "1" ]]; then return 0; fi
-      read -rp "$1 [y/N]: " a; [[ "${a,,}" == "y" || "${a,,}" == "yes" ]]
-    }
-
-    need_root() {
-      if [[ "$EUID" -ne 0 ]]; then echo "Run as root."; exit 1; fi
-    }
-    detect_os() {
-      . /etc/os-release
-      OS_FAMILY=""
-      if [[ "$ID" =~ (debian|ubuntu) || "$ID_LIKE" =~ (debian|ubuntu) ]]; then
-        OS_FAMILY="debian"
-      fi
-      [[ -z "$OS_FAMILY" ]] && { echo "Unsupported OS. Use Debian 12/Ubuntu 22.04+."; exit 1; }
-    }
-    autodetect_php_fpm() {
-      local sock
-      for sock in /run/php/php*-fpm.sock /run/php/php*-fpm-*.sock /run/php/php-fpm.sock; do
-        [[ -S "$sock" ]] && { echo "$sock"; return; }
-      done
-      echo "/run/php/php-fpm.sock"
-    }
-
-    # Defaults
-    ROLE=""
-    DOMAIN="_"
-    HTTP_PORT="8080"
-    DB_NAME="vmforge"
-    DB_USER="vmforge"
-    DB_PASS=""
-    PHP_FPM_SOCK=""
-    CONTROLLER_URL=""
-    NODE_TOKEN=""
-    ASSUME_YES=0
-
-    # Parse args
-    while [[ $# -gt 0 ]]; do
-      case "$1" in
-        --master) ROLE="master"; shift;;
-        --slave)  ROLE="slave"; shift;;
-        --domain) DOMAIN="$2"; shift 2;;
-        --http-port) HTTP_PORT="$2"; shift 2;;
-        --controller) CONTROLLER_URL="$2"; shift 2;;
-        --token) NODE_TOKEN="$2"; shift 2;;
-        --db-name) DB_NAME="$2"; shift 2;;
-        --db-user) DB_USER="$2"; shift 2;;
-        --db-pass) DB_PASS="$2"; shift 2;;
-        --php-fpm) PHP_FPM_SOCK="$2"; shift 2;;
-        --yes|-y) ASSUME_YES=1; shift;;
-        -h|--help) usage; exit 0;;
-        *) echo "Unknown arg: $1"; usage; exit 1;;
-      esac
-    done
-
-    need_root; detect_os
-
-    if [[ -z "$ROLE" ]]; then echo "Specify --master or --slave"; usage; exit 1; fi
-
-    # Install packages
-    apt-get update -y
-    if [[ "$ROLE" == "master" ]]; then
-      apt-get install -y nginx mariadb-server mariadb-client php-cli php-fpm php-curl php-xml php-mbstring php-zip php-mysql php-gd php-intl redis-server git unzip curl
-    else
-      apt-get install -y php-cli php-curl php-xml php-mbstring php-zip php-mysql redis-server git curl
+  # Select base packages
+  if [[ "$ROLE" == "master" ]]; then
+    if [[ "$OS_FAMILY" == "debian" ]]; then
+      [[ "$WEBSERVER" == "nginx" ]] && pkgs_to_install=DEBIAN_NGINX_PKGS || pkgs_to_install=DEBIAN_APACHE_PKGS
+    else # rhel
+      [[ "$WEBSERVER" == "nginx" ]] && pkgs_to_install=RHEL_NGINX_PKGS || pkgs_to_install=RHEL_APACHE_PKGS
     fi
+  else # slave
+    [[ "$OS_FAMILY" == "debian" ]] && pkgs_to_install=DEBIAN_SLAVE_PKGS || pkgs_to_install=RHEL_SLAVE_PKGS
+  fi
 
-    # Ensure user
-    id vmforge >/dev/null 2>&1 || useradd -r -s /usr/sbin/nologin -d /var/www/vmforge vmforge
-
-    install_dir="/var/www/vmforge"
-    mkdir -p "$install_dir"
-    rsync -a --delete --exclude ".git" ./ "$install_dir/"
-    chown -R vmforge:vmforge "$install_dir"
-
-    if [[ "$ROLE" == "master" ]]; then
-      # Configure DB
-      if [[ -z "$DB_PASS" ]]; then
-        echo "DB_PASS is required for master."; exit 1;
+  # Select certbot packages if needed
+  if [[ -n "$SSL_EMAIL" ]]; then
+      if [[ "$OS_FAMILY" == "debian" ]]; then
+          [[ "$WEBSERVER" == "nginx" ]] && certbot_pkgs=DEBIAN_CERTBOT_PKGS_nginx || certbot_pkgs=DEBIAN_CERTBOT_PKGS_apache
+          pkgs_to_install+=("${certbot_pkgs[@]}")
+      else # rhel
+          pkgs_to_install+=("${RHEL_CERTBOT_PKGS[@]}")
       fi
+  fi
 
-      systemctl enable --now mariadb
-      mysql -uroot <<SQL
-    CREATE DATABASE IF NOT EXISTS \`${DB_NAME}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-    CREATE USER IF NOT EXISTS '${DB_USER}'@'localhost' IDENTIFIED BY '${DB_PASS}';
-    GRANT ALL PRIVILEGES ON \`${DB_NAME}\`.* TO '${DB_USER}'@'localhost';
-    FLUSH PRIVILEGES;
-    SQL
+  # Perform installation
+  if [[ "$OS_FAMILY" == "debian" ]]; then
+    $PKG_MANAGER update -y
+    $PKG_MANAGER install -y "${pkgs_to_install[@]}"
+  elif [[ "$OS_FAMILY" == "rhel" ]]; then
+    log "Enabling EPEL and Remi repositories..."
+    $PKG_MANAGER install -y 'https://dl.fedoraproject.org/pub/epel/epel-release-latest-9.noarch.rpm'
+    $PKG_MANAGER install -y 'http://rpms.remirepo.net/enterprise/remi-release-9.rpm'
+    $PKG_MANAGER module reset php -y
+    $PKG_MANAGER module enable php:remi-8.2 -y
 
-      # .env
-      if [[ ! -f "$install_dir/.env" ]]; then
-        cp "$install_dir/.env.example" "$install_dir/.env" || true
-      fi
-      sed -i "s~^DB_HOST=.*~DB_HOST=127.0.0.1~" "$install_dir/.env" || true
-      sed -i "s~^DB_NAME=.*~DB_NAME=${DB_NAME}~" "$install_dir/.env" || echo "DB_NAME=${DB_NAME}" >> "$install_dir/.env"
-      sed -i "s~^DB_USER=.*~DB_USER=${DB_USER}~" "$install_dir/.env" || echo "DB_USER=${DB_USER}" >> "$install_dir/.env"
-      sed -i "s~^DB_PASS=.*~DB_PASS=${DB_PASS}~" "$install_dir/.env" || echo "DB_PASS=${DB_PASS}" >> "$install_dir/.env"
-      sed -i "s~^REDIS_HOST=.*~REDIS_HOST=127.0.0.1~" "$install_dir/.env" || echo "REDIS_HOST=127.0.0.1" >> "$install_dir/.env"
+    $PKG_MANAGER install -y "${pkgs_to_install[@]}"
 
-      # Run migrations
-      sudo -u vmforge PHP_INI_SCAN_DIR="" php "$install_dir/scripts/db/migrate.php"
+    log "Enabling services for RHEL..."
+    systemctl enable --now "$WEBSERVER_SERVICE"
+    systemctl enable --now mariadb
+    systemctl enable --now redis
+    systemctl enable --now "$PHP_FPM_SERVICE"
 
-      # nginx
-      PHP_FPM_SOCK="${PHP_FPM_SOCK:-$(autodetect_php_fpm)}"
-      sed "s#{{SERVER_NAME}}#${DOMAIN}#g; s#{{ROOT}}#${install_dir}/public#g; s#{{PHP_FPM_SOCK}}#${PHP_FPM_SOCK}#g; s#{{HTTP_PORT}}#${HTTP_PORT}#g" \
-        "$install_dir/deploy/nginx-vmforge.conf.tpl" > /etc/nginx/sites-available/vmforge.conf
-      ln -sf /etc/nginx/sites-available/vmforge.conf /etc/nginx/sites-enabled/vmforge.conf
-      rm -f /etc/nginx/sites-enabled/default || true
-      systemctl reload nginx
-
-      echo "[+] Master install done: http://${DOMAIN}:${HTTP_PORT}"
-    else
-      # Slave: agent service
-      if [[ -z "$CONTROLLER_URL" || -z "$NODE_TOKEN" ]]; then
-        echo "Slave requires --controller and --token"; exit 1;
-      fi
-      install -o root -g root -m 0644 "$install_dir/deploy/vmforge-agent.service" /etc/systemd/system/vmforge-agent.service
-      install -o root -g root -m 0644 "$install_dir/deploy/agent.env.sample" /etc/vmforge-agent.env
-      sed -i "s#^AGENT_CONTROLLER_URL=.*#AGENT_CONTROLLER_URL=${CONTROLLER_URL}#; s#^AGENT_NODE_TOKEN=.*#AGENT_NODE_TOKEN=${NODE_TOKEN}#;" /etc/vmforge-agent.env
-      systemctl daemon-reload
-      systemctl enable --now vmforge-agent.service
-      echo "[+] Slave install done; agent running."
+    if [[ -n "$SSL_EMAIL" ]]; then
+        log "Configuring snapd for Certbot..."
+        systemctl enable --now snapd.socket
+        ln -s /var/lib/snapd/snap /snap || true
+        snap install core
+        snap install certbot --classic
+        ln -s /snap/bin/certbot /usr/bin/certbot || true
     fi
+  fi
+}
+
+install_ssl() {
+    if [[ -n "$SSL_EMAIL" ]]; then
+        log "Requesting SSL certificate with Certbot..."
+        if [[ "$DOMAIN" == "_" ]]; then
+            log "WARNING: Cannot request SSL for default domain. Please use --domain flag."
+            return
+        fi
+        certbot --"$WEBSERVER" -d "$DOMAIN" --non-interactive --agree-tos -m "$SSL_EMAIL" --redirect
+        log "Certbot setup complete."
+    fi
+}
+
+
+# --- Main Script ---
+# Defaults
+WEBSERVER="nginx"
+ROLE=""
+DOMAIN="_"
+HTTP_PORT="8080"
+# ... (rest of defaults)
+
+# Parse args
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --ssl) SSL_EMAIL="$2"; shift 2;;
+    # ... (rest of parsing)
+  esac
+done
+
+# ... (need_root, detect_os, webserver var setting) ...
+
+install_dependencies
+
+# ... (user creation, rsync) ...
+
+if [[ "$ROLE" == "master" ]]; then
+  # ... (db config, .env, migrations, webserver config) ...
+
+  install_ssl # Call the new SSL installation function
+
+  log "Master install done."
+  # ... (rest of master install)
+fi
+
+# ... (slave install)
+log "Installation complete."

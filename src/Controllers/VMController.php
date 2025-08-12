@@ -51,25 +51,29 @@ class VMController {
         $csrf = Security::csrfToken();
         $html = '<div class="card"><h2>VMs</h2>
         <table class="table"><thead><tr><th>UUID</th><th>Name</th><th>Type</th><th>vCPU</th><th>RAM(MB)</th><th>IP</th><th>Project</th><th>Console</th></tr></thead><tbody>'.$rows.'</tbody></table>
-        </div>
-        <div class="card"><h3>Create Instance</h3>
-        <form method="post" action="/admin/vms">
-            <input type="hidden" name="csrf" value="'.$csrf.'">
-            <label>Node</label><select name="node_id" required>'+ $nodeOptions +'</select>
-            <label>Type</label><select name="type"><option value="kvm">KVM</option><option value="lxc">LXC</option></select>
-            <input name="name" placeholder="vm-name" required>
-            <input name="vcpus" type="number" placeholder="2" value="2" required>
-            <input name="memory_mb" type="number" placeholder="2048" value="2048" required>
-            <input name="disk_gb" type="number" placeholder="20" value="20" required>
-            <label>Image</label><select name="image_id" required>'+ $imageOptions +'</select>
-            <label>Storage Pool</label><select name="storage_pool_id">'+ $poolOptions +'</select>
-            <label>IPv4 Subnet</label><select name="subnet_id">'+ $subnetOptions +'</select>
-            <input name="ip_address" placeholder="(optional IPv4 override) 192.0.2.10">
-            <label>IPv6 Subnet</label><select name="subnet6_id">'+ $subnet6Options +'</select>
-            <input name="bridge" placeholder="br0" value="br0" required>
-            <input name="vlan_tag" type="number" placeholder="(optional VLAN tag)">
-            <button type="submit">Create</button>
-        </form></div>';
+        </div>';
+
+        if (Policy::can('vms.create')) {
+            $html .= '<div class="card"><h3>Create Instance</h3>
+            <form method="post" action="/admin/vms">
+                <input type="hidden" name="csrf" value="'.$csrf.'">
+                <label>Node</label><select name="node_id" required>'+ $nodeOptions +'</select>
+                <label>Type</label><select name="type"><option value="kvm">KVM</option><option value="lxc">LXC</option></select>
+                <input name="name" placeholder="vm-name" required>
+                <input name="vcpus" type="number" placeholder="2" value="2" required>
+                <input name="memory_mb" type="number" placeholder="2048" value="2048" required>
+                <input name="disk_gb" type="number" placeholder="20" value="20" required>
+                <label>Image</label><select name="image_id" required>'+ $imageOptions +'</select>
+                <label>Storage Pool</label><select name="storage_pool_id">'+ $poolOptions +'</select>
+                <label>IPv4 Subnet</label><select name="subnet_id">'+ $subnetOptions +'</select>
+                <input name="ip_address" placeholder="(optional IPv4 override) 192.0.2.10">
+                <label>IPv6 Subnet</label><select name="subnet6_id">'+ $subnet6Options +'</select>
+                <input name="bridge" placeholder="br0" value="br0" required>
+                <input name="vlan_tag" type="number" placeholder="(optional VLAN tag)">
+                <button type="submit">Create</button>
+            </form></div>';
+        }
+
         View::render('VMs', $html);
     }
     private function macFromUuid(string $uuid): string {
@@ -81,6 +85,11 @@ class VMController {
     }
     public function store() {
         Auth::require();
+        if (!Policy::can('vms.create')) {
+            http_response_code(403);
+            View::render('Forbidden', '<div class="card"><h2>403 Forbidden</h2><p>You do not have permission to perform this action.</p></div>');
+            return;
+        }
         Security::requireCsrf($_POST['csrf'] ?? null);
         $uuid = UUID::v4();
         $pid = Policy::requireProjectSelected();
