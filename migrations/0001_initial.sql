@@ -9,8 +9,6 @@ CREATE TABLE users (
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
-INSERT INTO users(email, password_hash) VALUES('admin@local', '$2y$10$S4mC7JcQKMBI8H0g9YtaZed7B7hM7bCxywV3ByN5xwHfCq0vm.3bO'); -- 'adminadmin'
-
 CREATE TABLE nodes (
   id INT AUTO_INCREMENT PRIMARY KEY,
   name VARCHAR(190) NOT NULL,
