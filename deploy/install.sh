@@ -1,33 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# --- Global variables ---
-OS_FAMILY=""
-PKG_MANAGER=""
-PHP_FPM_SERVICE=""
-PHP_FPM_SOCK_PATH=""
-WEBSERVER_CONF_DIR=""
-WEBSERVER_USER=""
-WEBSERVER_SERVICE=""
-SSL_EMAIL=""
-DEBUG_MODE=0
-ASSUME_YES=0
+# --- Function Definitions ---
+log() {
+    echo "[VMForge Installer] - $*"
+}
 
-# --- Package Lists ---
-DEBIAN_NGINX_PKGS=(nginx mariadb-server mariadb-client php8.2-cli php8.2-fpm php8.2-curl php8.2-xml php8.2-mbstring php8.2-zip php8.2-mysql php8.2-gd php8.2-intl redis-server git unzip curl ufw)
-DEBIAN_APACHE_PKGS=(apache2 mariadb-server mariadb-client php8.2-cli php8.2-fpm php8.2-curl php8.2-xml php8.2-mbstring php8.2-zip php8.2-mysql php8.2-gd php8.2-intl redis-server git unzip curl libapache2-mod-php8.2 ufw)
-DEBIAN_VIRT_PKGS=(qemu-kvm libvirt-daemon-system libvirt-clients cloud-image-utils lxc lxc-templates bridge-utils novnc websockify nftables)
-DEBIAN_SLAVE_PKGS=(php8.2-cli php8.2-curl php8.2-xml php8.2-mbstring php8.2-zip php8.2-mysql redis-server git curl "${DEBIAN_VIRT_PKGS[@]}")
-DEBIAN_CERTBOT_PKGS_nginx=(certbot python3-certbot-nginx)
-DEBIAN_CERTBOT_PKGS_apache=(certbot python3-certbot-apache)
-
-RHEL_NGINX_PKGS=(nginx mariadb-server mariadb php-cli php-fpm php-curl php-xml php-mbstring php-zip php-mysqlnd php-gd php-intl redis git unzip curl firewalld)
-RHEL_APACHE_PKGS=(httpd mariadb-server mariadb php-cli php-fpm php-curl php-xml php-mbstring php-zip php-mysqlnd php-gd php-intl redis git unzip curl firewalld)
-RHEL_VIRT_PKGS=(qemu-kvm libvirt-daemon libvirt-client lxc lxc-templates bridge-utils novnc websockify nftables)
-RHEL_SLAVE_PKGS=(php-cli php-curl php-xml php-mbstring php-zip php-mysqlnd redis git curl "${RHEL_VIRT_PKGS[@]}")
-RHEL_CERTBOT_PKGS=(snapd)
-
-# --- Helper Functions ---
 usage() {
   cat <<'USAGE'
 VMForge unattended installer
@@ -38,10 +16,6 @@ Flags:
   --ssl <email>           (master) Enable SSL with Let's Encrypt and use this email.
   ...
 USAGE
-}
-
-log() {
-    echo -e "[VMForge Installer] $(date +'%T') - $*"
 }
 
 need_root() {
@@ -65,7 +39,6 @@ confirm() {
     done
 }
 
-# --- Core Functions ---
 detect_os() {
     log "Starting OS detection..."
     if [ -f /etc/os-release ]; then
@@ -177,9 +150,23 @@ setup_firewall() {
     log "Firewall configured and enabled."
 }
 
-# --- Main Script ---
+# --- Global Variables & Package Lists ---
+OS_FAMILY=""; PKG_MANAGER=""; PHP_FPM_SERVICE=""; PHP_FPM_SOCK_PATH=""; WEBSERVER_CONF_DIR=""; WEBSERVER_USER=""; WEBSERVER_SERVICE=""; SSL_EMAIL=""; DEBUG_MODE=0; ASSUME_YES=0
+DEBIAN_NGINX_PKGS=(nginx mariadb-server mariadb-client php8.2-cli php8.2-fpm php8.2-curl php8.2-xml php8.2-mbstring php8.2-zip php8.2-mysql php8.2-gd php8.2-intl redis-server git unzip curl ufw)
+DEBIAN_APACHE_PKGS=(apache2 mariadb-server mariadb-client php8.2-cli php8.2-fpm php8.2-curl php8.2-xml php8.2-mbstring php8.2-zip php8.2-mysql php8.2-gd php8.2-intl redis-server git unzip curl libapache2-mod-php8.2 ufw)
+DEBIAN_VIRT_PKGS=(qemu-kvm libvirt-daemon-system libvirt-clients cloud-image-utils lxc lxc-templates bridge-utils novnc websockify nftables)
+DEBIAN_SLAVE_PKGS=(php8.2-cli php8.2-curl php8.2-xml php8.2-mbstring php8.2-zip php8.2-mysql redis-server git curl "${DEBIAN_VIRT_PKGS[@]}")
+DEBIAN_CERTBOT_PKGS_nginx=(certbot python3-certbot-nginx)
+DEBIAN_CERTBOT_PKGS_apache=(certbot python3-certbot-apache)
+RHEL_NGINX_PKGS=(nginx mariadb-server mariadb php-cli php-fpm php-curl php-xml php-mbstring php-zip php-mysqlnd php-gd php-intl redis git unzip curl firewalld)
+RHEL_APACHE_PKGS=(httpd mariadb-server mariadb php-cli php-fpm php-curl php-xml php-mbstring php-zip php-mysqlnd php-gd php-intl redis git unzip curl firewalld)
+RHEL_VIRT_PKGS=(qemu-kvm libvirt-daemon libvirt-client lxc lxc-templates bridge-utils novnc websockify nftables)
+RHEL_SLAVE_PKGS=(php-cli php-curl php-xml php-mbstring php-zip php-mysqlnd redis git curl "${RHEL_VIRT_PKGS[@]}")
+RHEL_CERTBOT_PKGS=(snapd)
+
+# --- Main Execution ---
 # Defaults
-WEBSERVER="nginx"; ROLE=""; DOMAIN=""; HTTP_PORT="80"; DB_NAME="vmforge"; DB_USER="vmforge"; DB_PASS=""; ASSUME_YES=0; CONTROLLER_URL=""; NODE_TOKEN=""
+WEBSERVER="nginx"; ROLE=""; DOMAIN=""; HTTP_PORT="80"; DB_NAME="vmforge"; DB_USER="vmforge"; DB_PASS=""; CONTROLLER_URL=""; NODE_TOKEN=""
 
 # Parse args
 while [[ $# -gt 0 ]]; do
@@ -203,7 +190,7 @@ install_dependencies
 if [[ "$ROLE" == "master" ]]; then
   log "Starting master installation..."
   if [[ -z "$DB_PASS" ]]; then log "ERROR: --db-pass is required for master."; exit 1; fi
-  mkdir -p /var/www/vmforge; rsync -a . /var/www/vmforge/ --exclude '.git' --exclude '.github'; chown -R "$WEBSERVER_USER":"$WEBSERVER_USER" /var/www/vmforge
+  mkdir -p /var/www/vmforge; rsync -a . /var/www/vmforge/ --exclude '.git' --exclude '.github'; chown -R "$WEBSERVER_USER":"$WEBSERVER_USER" /var/w/vmforge
   systemctl enable --now mariadb
   mysql -u root -e "CREATE DATABASE IF NOT EXISTS \`$DB_NAME\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
   mysql -u root -e "CREATE USER IF NOT EXISTS '$DB_USER'@'localhost' IDENTIFIED BY '$DB_PASS';"
