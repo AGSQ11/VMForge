@@ -1,153 +1,327 @@
 <?php
 namespace VMForge\Core;
 
-use VMForge\Core\DB;
-use VMForge\Core\Password;
-use PDO;
+use VMForge\Models\User;
+use VMForge\Services\TwoFactorAuth;
 
 class Auth {
-    public static function attempt(string $email, string $password): bool {
-        $pdo = DB::pdo();
-        $st = $pdo->prepare('SELECT id, email, password, password_hash, password_legacy, failed_logins, locked_until FROM users WHERE email = ? LIMIT 1');
-        $st->execute([$email]);
-        $u = $st->fetch(PDO::FETCH_ASSOC);
-        if (!$u) return false;
-
-        // lockout check
-        if (!empty($u['locked_until'])) {
-            $lockedUntil = strtotime((string)$u['locked_until']);
-            if ($lockedUntil && time() < $lockedUntil) return false;
+    private const SESSION_TIMEOUT = 3600; // 1 hour
+    private const MAX_LOGIN_ATTEMPTS = 5;
+    private const LOCKOUT_DURATION = 900; // 15 minutes
+    
+    /**
+     * Authenticate user with email and password
+     */
+    public static function attempt(string $email, string $password, ?string $totpCode = null): array {
+        $user = User::findByEmail($email);
+        
+        if (!$user) {
+            self::logFailedAttempt($email);
+            return ['success' => false, 'error' => 'Invalid credentials'];
         }
-
-        $ok = false;
-        $rehash = false;
-
-        // Preferred modern hash
-        if (!empty($u['password_hash'])) {
-            if (Password::verify($password, $u['password_hash'])) {
-                $ok = true;
-                $rehash = Password::needsRehash($u['password_hash']);
+        
+        // Check if account is locked
+        if (self::isAccountLocked($user['id'])) {
+            return ['success' => false, 'error' => 'Account temporarily locked due to multiple failed attempts'];
+        }
+        
+        // Verify password
+        if (!password_verify($password, $user['password_hash'])) {
+            self::registerFailure($user['id']);
+            return ['success' => false, 'error' => 'Invalid credentials'];
+        }
+        
+        // Check if password needs rehashing
+        if (password_needs_rehash($user['password_hash'], PASSWORD_ARGON2ID)) {
+            User::updatePassword($user['id'], $password);
+        }
+        
+        // Verify 2FA if enabled
+        if (!empty($user['totp_secret'])) {
+            if (!$totpCode) {
+                return ['success' => false, 'requires_2fa' => true];
             }
-        } else {
-            // Legacy support: (1) bcrypt/argon2 stored in old 'password' column
-            if (!empty($u['password']) && password_get_info((string)$u['password'])['algo'] !== 0) {
-                if (password_verify($password, (string)$u['password'])) {
-                    $ok = true;
-                }
-            }
-            // Legacy support: (2) sha256 without salt (last resort)
-            if (!$ok && !empty($u['password'])) {
-                $legacy = (string)$u['password'];
-                if (strlen($legacy) === 64 && ctype_xdigit($legacy)) {
-                    $ok = hash_equals($legacy, hash('sha256', $password));
-                }
-            }
-            // Legacy support: (3) password_legacy column as fallback (sha256 or old scheme)
-            if (!$ok && !empty($u['password_legacy'])) {
-                $L = (string)$u['password_legacy'];
-                if (password_get_info($L)['algo'] !== 0) {
-                    $ok = password_verify($password, $L);
-                } elseif (strlen($L) === 64 && ctype_xdigit($L)) {
-                    $ok = hash_equals($L, hash('sha256', $password));
-                }
+            
+            if (!TwoFactorAuth::verify($user['totp_secret'], $totpCode)) {
+                self::registerFailure($user['id']);
+                return ['success' => false, 'error' => 'Invalid 2FA code'];
             }
         }
-
-        if (!$ok) {
-            self::registerFailure((int)$u['id']);
+        
+        // Successful authentication
+        self::clearFailedAttempts($user['id']);
+        self::loginUser($user['id']);
+        
+        // Log the successful login
+        self::logSuccessfulLogin($user['id']);
+        
+        return ['success' => true, 'user' => $user];
+    }
+    
+    /**
+     * Create a new session for the authenticated user
+     */
+    public static function loginUser(int $userId): void {
+        if (session_status() !== PHP_SESSION_ACTIVE) {
+            session_start();
+        }
+        
+        // Regenerate session ID to prevent fixation attacks
+        session_regenerate_id(true);
+        
+        $_SESSION['uid'] = $userId;
+        $_SESSION['fingerprint'] = self::generateFingerprint();
+        $_SESSION['last_activity'] = time();
+        $_SESSION['ip_address'] = $_SERVER['REMOTE_ADDR'] ?? '';
+        $_SESSION['user_agent'] = $_SERVER['HTTP_USER_AGENT'] ?? '';
+        
+        // Load user permissions into session
+        $permissions = User::getPermissions($userId);
+        $_SESSION['permissions'] = $permissions;
+        
+        // Check if user has admin role
+        $_SESSION['is_admin'] = User::hasRole($userId, 'admin');
+    }
+    
+    /**
+     * Verify current session is valid
+     */
+    public static function check(): bool {
+        if (session_status() !== PHP_SESSION_ACTIVE) {
+            session_start();
+        }
+        
+        if (empty($_SESSION['uid'])) {
             return false;
         }
-
-        // success: migrate to Argon2id, clear legacy, reset counters
-        $hash = Password::hash($password);
-        $upd = $pdo->prepare('UPDATE users SET password_hash=?, password=NULL, password_legacy=NULL, failed_logins=0, locked_until=NULL, last_login_at=NOW() WHERE id=?');
-        $upd->execute([$hash, (int)$u['id']]);
-
-        self::loginUser((int)$u['id']);
-        return true;
-    }
-
-    public static function loginUser(int $userId): void {
-        if (session_status() !== PHP_SESSION_ACTIVE) { session_start(); }
-        session_regenerate_id(true);
-        $_SESSION['uid'] = $userId;
-        $_SESSION['fp']  = self::fingerprint();
-        $_SESSION['t']   = time();
-        $_SESSION['permissions'] = \VMForge\Models\User::getPermissions($userId);
-    }
-
-    public static function logout(): void {
-        if (session_status() !== PHP_SESSION_ACTIVE) { session_start(); }
-        $_SESSION = [];
-        if (ini_get('session.use_cookies')) {
-            $params = session_get_cookie_params();
-            setcookie(session_name(), '', time() - 42000, $params['path'] ?? '/', $params['domain'] ?? '', (bool)$params['secure'], (bool)$params['httponly']);
+        
+        // Check session timeout
+        if (isset($_SESSION['last_activity'])) {
+            if (time() - $_SESSION['last_activity'] > self::SESSION_TIMEOUT) {
+                self::logout();
+                return false;
+            }
         }
-        session_destroy();
-    }
-
-    public static function check(): bool {
-        if (session_status() !== PHP_SESSION_ACTIVE) { session_start(); }
-        if (empty($_SESSION['uid'])) return false;
-        if (($_SESSION['fp'] ?? '') !== self::fingerprint()) return false;
+        
+        // Verify session fingerprint
+        if (!self::verifyFingerprint()) {
+            self::logout();
+            return false;
+        }
+        
+        // Update last activity
+        $_SESSION['last_activity'] = time();
+        
         return true;
     }
-
-    public static function id(): ?int {
-        if (!self::check()) return null;
-        return (int)($_SESSION['uid'] ?? 0) ?: null;
-    }
-
-    public static function user(): ?array
-    {
+    
+    /**
+     * Get current authenticated user
+     */
+    public static function user(): ?array {
         if (!self::check()) {
             return null;
         }
-        $user = \VMForge\Models\User::findById((int)$_SESSION['uid']);
+        
+        $user = User::findById($_SESSION['uid']);
         if ($user) {
             $user['permissions'] = $_SESSION['permissions'] ?? [];
-            // For backward compatibility with Policy::isAdmin
-            if (\VMForge\Models\User::hasRole($user['id'], 'admin')) {
-                $user['is_admin'] = true;
-            }
+            $user['is_admin'] = $_SESSION['is_admin'] ?? false;
         }
+        
         return $user;
     }
-
+    
+    /**
+     * Get current user ID
+     */
+    public static function id(): ?int {
+        return self::check() ? ($_SESSION['uid'] ?? null) : null;
+    }
+    
+    /**
+     * Require authentication or redirect to login
+     */
     public static function require(): void {
-        if (!self::user()) {
-            http_response_code(302);
-            header('Location: /login');
+        if (!self::check()) {
+            header('Location: /login?redirect=' . urlencode($_SERVER['REQUEST_URI'] ?? '/'));
             exit;
         }
     }
-
-    private static function registerFailure(int $userId): void {
-        $pdo = DB::pdo();
-        $max = (int)Env::get('AUTH_MAX_FAILURES', '6');
-        $lockSecs = (int)Env::get('AUTH_LOCK_SECONDS', '900');
-        $upd = $pdo->prepare('UPDATE users SET failed_logins = failed_logins + 1 WHERE id=?');
-        $upd->execute([$userId]);
-        $row = $pdo->prepare('SELECT failed_logins FROM users WHERE id=?');
-        $row->execute([$userId]);
-        $fail = (int)$row->fetchColumn();
-        if ($fail >= $max) {
-            $lock = $pdo->prepare('UPDATE users SET locked_until = (NOW() + INTERVAL ? SECOND) WHERE id=?');
-            $lock->execute([$lockSecs, $userId]);
+    
+    /**
+     * Require specific permission
+     */
+    public static function requirePermission(string $permission): void {
+        self::require();
+        
+        if (!Policy::can($permission)) {
+            http_response_code(403);
+            View::render('Forbidden', '<div class="card"><h2>403 Forbidden</h2><p>You do not have permission to access this resource.</p></div>');
+            exit;
         }
     }
-
-    private static function fingerprint(): string {
-        $ua = $_SERVER['HTTP_USER_AGENT'] ?? '';
-        $ip = $_SERVER['REMOTE_ADDR'] ?? '0.0.0.0';
-        // Truncate ipv4 to /16, ipv6 to /48 to reduce churn
-        if (strpos($ip, ':') !== false) {
-            $parts = explode(':', $ip);
-            $ipKey = implode(':', array_slice($parts, 0, 3));
-        } else {
-            $oct = explode('.', $ip);
-            $ipKey = $oct[0] . '.' . ($oct[1] ?? '0');
+    
+    /**
+     * Destroy current session
+     */
+    public static function logout(): void {
+        if (session_status() !== PHP_SESSION_ACTIVE) {
+            session_start();
         }
-        return hash('sha256', $ua . '|' . $ipKey);
+        
+        $_SESSION = [];
+        
+        if (ini_get('session.use_cookies')) {
+            $params = session_get_cookie_params();
+            setcookie(
+                session_name(),
+                '',
+                time() - 42000,
+                $params['path'],
+                $params['domain'],
+                $params['secure'],
+                $params['httponly']
+            );
+        }
+        
+        session_destroy();
+    }
+    
+    /**
+     * Generate session fingerprint
+     */
+    private static function generateFingerprint(): string {
+        $data = [
+            $_SERVER['HTTP_USER_AGENT'] ?? '',
+            $_SERVER['HTTP_ACCEPT'] ?? '',
+            $_SERVER['HTTP_ACCEPT_LANGUAGE'] ?? '',
+            self::getIpPrefix()
+        ];
+        
+        return hash('sha256', implode('|', $data));
+    }
+    
+    /**
+     * Verify session fingerprint
+     */
+    private static function verifyFingerprint(): bool {
+        $current = self::generateFingerprint();
+        $stored = $_SESSION['fingerprint'] ?? '';
+        
+        return hash_equals($stored, $current);
+    }
+    
+    /**
+     * Get IP address prefix for fingerprinting
+     */
+    private static function getIpPrefix(): string {
+        $ip = $_SERVER['REMOTE_ADDR'] ?? '';
+        
+        if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
+            // Use /24 for IPv4
+            $parts = explode('.', $ip);
+            return $parts[0] . '.' . $parts[1] . '.' . $parts[2] . '.0';
+        } elseif (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6)) {
+            // Use /64 for IPv6
+            $parts = explode(':', $ip);
+            return implode(':', array_slice($parts, 0, 4)) . '::';
+        }
+        
+        return '';
+    }
+    
+    /**
+     * Register failed login attempt
+     */
+    private static function registerFailure(int $userId): void {
+        $pdo = DB::pdo();
+        $stmt = $pdo->prepare('
+            UPDATE users 
+            SET failed_logins = failed_logins + 1,
+                last_failed_login = NOW()
+            WHERE id = ?
+        ');
+        $stmt->execute([$userId]);
+        
+        // Check if we need to lock the account
+        $user = User::findById($userId);
+        if ($user && $user['failed_logins'] >= self::MAX_LOGIN_ATTEMPTS) {
+            $stmt = $pdo->prepare('
+                UPDATE users 
+                SET locked_until = DATE_ADD(NOW(), INTERVAL ? SECOND)
+                WHERE id = ?
+            ');
+            $stmt->execute([self::LOCKOUT_DURATION, $userId]);
+        }
+    }
+    
+    /**
+     * Check if account is locked
+     */
+    private static function isAccountLocked(int $userId): bool {
+        $user = User::findById($userId);
+        
+        if (!$user || empty($user['locked_until'])) {
+            return false;
+        }
+        
+        return strtotime($user['locked_until']) > time();
+    }
+    
+    /**
+     * Clear failed login attempts
+     */
+    private static function clearFailedAttempts(int $userId): void {
+        $pdo = DB::pdo();
+        $stmt = $pdo->prepare('
+            UPDATE users 
+            SET failed_logins = 0,
+                locked_until = NULL
+            WHERE id = ?
+        ');
+        $stmt->execute([$userId]);
+    }
+    
+    /**
+     * Log failed login attempt
+     */
+    private static function logFailedAttempt(string $email): void {
+        $pdo = DB::pdo();
+        $stmt = $pdo->prepare('
+            INSERT INTO audit_log (user_id, action, ip, details, created_at)
+            VALUES (NULL, ?, ?, ?, NOW())
+        ');
+        $stmt->execute([
+            'login_failed',
+            $_SERVER['REMOTE_ADDR'] ?? '',
+            json_encode(['email' => $email])
+        ]);
+    }
+    
+    /**
+     * Log successful login
+     */
+    private static function logSuccessfulLogin(int $userId): void {
+        // Update user record
+        $pdo = DB::pdo();
+        $stmt = $pdo->prepare('
+            UPDATE users 
+            SET last_login_at = NOW(),
+                last_login_ip = ?
+            WHERE id = ?
+        ');
+        $stmt->execute([$_SERVER['REMOTE_ADDR'] ?? '', $userId]);
+        
+        // Add audit log entry
+        $stmt = $pdo->prepare('
+            INSERT INTO audit_log (user_id, action, ip, details, created_at)
+            VALUES (?, ?, ?, NULL, NOW())
+        ');
+        $stmt->execute([
+            $userId,
+            'login_success',
+            $_SERVER['REMOTE_ADDR'] ?? ''
+        ]);
     }
 }
