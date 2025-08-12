@@ -167,7 +167,6 @@ install_dependencies() {
                 php${PHP_VERSION}-mysql \
                 php${PHP_VERSION}-redis \
                 php${PHP_VERSION}-curl \
-                php${PHP_VERSION}-json \
                 php${PHP_VERSION}-mbstring \
                 php${PHP_VERSION}-xml \
                 php${PHP_VERSION}-zip \
@@ -227,7 +226,7 @@ install_dependencies() {
                 mariadb-server mariadb \
                 redis \
                 php php-fpm php-cli php-common \
-                php-mysqlnd php-redis php-json \
+                php-mysqlnd php-redis \
                 php-mbstring php-xml php-zip \
                 php-bcmath php-gd php-intl
             
