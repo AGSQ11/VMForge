@@ -67,6 +67,18 @@ After the master installation script completes, you can access the web panel at 
 
 The first time you access the panel, you will be greeted with the initial setup page. Here, you will create the first administrator account by providing an email address and a password. Once the account is created, you will be redirected to the login page.
 
+## Security Features
+
+The installer is designed with security in mind. During a master installation, the following automated security enhancements are performed:
+
+- **Database Hardening:** The MariaDB installation is automatically hardened by setting the root password, removing anonymous users, disabling remote root login, and removing the test database.
+- **Firewall Configuration:** A basic firewall is configured to protect your server. On Debian/Ubuntu systems, `ufw` is used. On RHEL-family systems, `firewalld` is used. The firewall is configured to allow traffic only on necessary ports (SSH, HTTP, and HTTPS if SSL is enabled).
+- **Secure Web Server Configuration:** The Nginx and Apache configuration templates include security headers (such as `X-Content-Type-Options` and `X-Frame-Options`) to help protect against common web vulnerabilities.
+
+### Apache Configuration Notes
+
+When using the Apache web server, the installer assumes that the `rewrite` and `headers` modules are available. These are standard modules and are typically enabled by default in a LAMP stack environment.
+
 ## Supported Operating Systems
 
 The installer script officially supports the following operating systems:
